@@ -247,18 +247,39 @@ func (h *handlers) handleRestoreFile(w http.ResponseWriter, r *http.Request, fil
 		writeError(w, http.StatusBadRequest, "out_path is required")
 		return
 	}
-	vn := body.VersionNum
-	if vn == 0 {
-		vn = 1
-	}
-
 	go func() {
-		if err := h.agent.RestoreFile(context.Background(), fileID, vn, body.OutPath); err != nil {
-			log.Printf("restore file %d version %d error: %v", fileID, vn, err)
+		if err := h.agent.RestoreFile(context.Background(), fileID, body.VersionNum, body.OutPath); err != nil {
+			log.Printf("restore file %d version %d error: %v", fileID, body.VersionNum, err)
 		}
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "restore started", "out_path": body.OutPath})
+}
+
+// POST /api/restore
+func (h *handlers) handleRestoreByPrefix(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	var body2 struct {
+		DisplayPrefix string `json:"display_prefix"`
+		OutPath       string `json:"out_path"`
+		VersionNum    int    `json:"version_num"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body2); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body2.OutPath == "" {
+		writeError(w, http.StatusBadRequest, "out_path is required")
+		return
+	}
+
+	go func() {
+		if err := h.agent.RestoreByPrefix(context.Background(), body2.DisplayPrefix, body2.OutPath, body2.VersionNum); err != nil {
+			log.Printf("restore prefix %q error: %v", body2.DisplayPrefix, err)
+		}
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "restore started", "out_path": body2.OutPath})
 }
 
 // GET /api/schedules
@@ -509,6 +530,15 @@ func (h *handlers) registerRoutes(mux *http.ServeMux) {
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
+	}))
+
+	// Bulk restore
+	mux.HandleFunc("/api/restore", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		h.handleRestoreByPrefix(w, r)
 	}))
 
 	// Config

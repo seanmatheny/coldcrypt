@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -21,6 +22,22 @@ import (
 
 	"context"
 )
+
+
+// setupLogging configures the standard logger to write to both stderr and a log
+// file in /var/log. If the log file cannot be opened, only stderr is used.
+// The returned function should be called with defer to close the file.
+func setupLogging() func() {
+	const logPath = "/var/log/coldcrypt.log"
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("warning: could not open log file %s: %v (logging to stderr only)", logPath, err)
+		return func() {}
+	}
+	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	log.Printf("logging to %s", logPath)
+	return func() { _ = f.Close() }
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -119,6 +136,9 @@ func cmdServe(args []string) {
 	cfgPath := fs.String("config", "", "path to config.json")
 	_ = fs.Parse(args)
 
+	closeLog := setupLogging()
+	defer closeLog()
+
 	cfg, resolvedPath := loadConfig(*cfgPath)
 
 	database, err := db.New(cfg.DataDir)
@@ -151,6 +171,9 @@ func cmdBackup(args []string) {
 	fs := flag.NewFlagSet("backup", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.json")
 	_ = fs.Parse(args)
+
+	closeLog := setupLogging()
+	defer closeLog()
 
 	dirs := fs.Args()
 	cfg, _ := loadConfig(*cfgPath)

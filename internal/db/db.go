@@ -363,6 +363,36 @@ func (d *DB) GetFileByID(id int64) (*FileEntry, error) {
 	return &f, err
 }
 
+// ListFilesByDisplayPrefix returns all files whose display_path starts with the given
+// prefix, ordered by display_path. If prefix is empty, all files are returned.
+func (d *DB) ListFilesByDisplayPrefix(prefix string) ([]FileEntry, error) {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if prefix == "" {
+		rows, err = d.conn.Query(`SELECT id, source_path, display_path FROM files ORDER BY display_path`)
+	} else {
+		rows, err = d.conn.Query(
+			`SELECT id, source_path, display_path FROM files WHERE display_path LIKE ? ORDER BY display_path`,
+			prefix+"%",
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var files []FileEntry
+	for rows.Next() {
+		var f FileEntry
+		if err := rows.Scan(&f.ID, &f.SourcePath, &f.DisplayPath); err != nil {
+			return nil, err
+		}
+		files = append(files, f)
+	}
+	return files, rows.Err()
+}
+
 // CreateSchedule creates a new schedule.
 func (d *DB) CreateSchedule(name, cronExpr string, sourceDirs []string) (*Schedule, error) {
 	dirs := strings.Join(sourceDirs, "\n")
