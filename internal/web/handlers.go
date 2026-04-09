@@ -1,10 +1,12 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -230,6 +232,29 @@ func (h *handlers) handleGetFileVersions(w http.ResponseWriter, r *http.Request,
 		versions = []db.FileVersion{}
 	}
 	writeJSON(w, http.StatusOK, versions)
+}
+
+// GET /api/files/:id/download?version_num=N
+func (h *handlers) handleDownloadFile(w http.ResponseWriter, r *http.Request, fileID int64) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	versionNum, _ := strconv.Atoi(r.URL.Query().Get("version_num"))
+
+	var buf bytes.Buffer
+	filename, err := h.agent.DownloadFile(r.Context(), fileID, versionNum, &buf)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	disp := mime.FormatMediaType("attachment", map[string]string{"filename": filename})
+	w.Header().Set("Content-Disposition", disp)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	w.WriteHeader(http.StatusOK)
+	_, _ = buf.WriteTo(w)
 }
 
 // POST /api/files/:id/restore
@@ -493,6 +518,13 @@ func (h *handlers) registerRoutes(mux *http.ServeMux) {
 				return
 			}
 			h.handleGetFileVersions(w, r, id)
+		} else if strings.HasSuffix(path, "/download") {
+			id, ok := parseIDFromPath(path, "/api/files/", "/download")
+			if !ok {
+				writeError(w, http.StatusBadRequest, "invalid file id")
+				return
+			}
+			h.handleDownloadFile(w, r, id)
 		} else if strings.HasSuffix(path, "/restore") {
 			id, ok := parseIDFromPath(path, "/api/files/", "/restore")
 			if !ok {

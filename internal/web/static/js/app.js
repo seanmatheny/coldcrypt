@@ -346,19 +346,14 @@ async function showVersions(fileID, displayPath) {
   });
 }
 
-// Prompt to restore a single file version.
+// Trigger a direct browser download for a single file version.
 function promptRestore(fileID, versionNum, displayPath) {
-  restoreFileID = fileID;
-  restoreVersionNum = versionNum;
-  restoreDisplayPrefix = null;
-  versionsModal.hide();
-  document.getElementById('restoreModalLabel').textContent = `Restore: ${displayPath}`;
-  document.getElementById('restore-path-hint').textContent =
-    'Enter the full path where the file should be restored. ' +
-    'If you enter a directory path, the original filename will be appended.';
-  document.getElementById('restore-out-path').value = '';
-  document.getElementById('restore-msg').classList.add('d-none');
-  restoreModal.show();
+  const a = document.createElement('a');
+  a.href = `/api/files/${fileID}/download?version_num=${versionNum}`;
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 // Prompt to restore a whole directory (or everything when prefix is '').
