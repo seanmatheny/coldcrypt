@@ -258,9 +258,10 @@ function renderTreeNode(node, container, pathPrefix, depth) {
     const rowEl = document.createElement('div');
     rowEl.className = 'tree-row tree-dir';
     rowEl.style.paddingLeft = indent + 'px';
+    rowEl.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
     rowEl.innerHTML = `
-      <span class="tree-toggle">${isExpanded ? '▾' : '▸'}</span>
-      <i class="fa ${isExpanded ? 'fa-folder-open' : 'fa-folder'} text-warning me-1 tree-folder-icon"></i>
+      <span class="tree-toggle" aria-hidden="true">${isExpanded ? '▾' : '▸'}</span>
+      <i class="fa ${isExpanded ? 'fa-folder-open' : 'fa-folder'} text-warning me-1 tree-folder-icon" aria-hidden="true"></i>
       <span class="tree-name">${esc(name)}</span>
       <span class="tree-actions">
         <button class="btn btn-xs btn-outline-success ms-2"
@@ -276,11 +277,13 @@ function renderTreeNode(node, container, pathPrefix, depth) {
     rowEl.addEventListener('click', () => {
       if (expandedDirs.has(fullPath)) {
         expandedDirs.delete(fullPath);
+        rowEl.setAttribute('aria-expanded', 'false');
         rowEl.querySelector('.tree-toggle').textContent = '▸';
         rowEl.querySelector('.tree-folder-icon').className = 'fa fa-folder text-warning me-1 tree-folder-icon';
         childrenEl.classList.add('d-none');
       } else {
         expandedDirs.add(fullPath);
+        rowEl.setAttribute('aria-expanded', 'true');
         rowEl.querySelector('.tree-toggle').textContent = '▾';
         rowEl.querySelector('.tree-folder-icon').className = 'fa fa-folder-open text-warning me-1 tree-folder-icon';
         childrenEl.classList.remove('d-none');
@@ -299,7 +302,7 @@ function renderTreeNode(node, container, pathPrefix, depth) {
     rowEl.className = 'tree-row tree-file';
     rowEl.style.paddingLeft = indent + 'px';
     rowEl.innerHTML = `
-      <span class="tree-toggle invisible">▸</span>
+      <span class="tree-toggle invisible" aria-hidden="true">▸</span>
       <i class="fa fa-file text-muted me-1"></i>
       <span class="tree-name">${esc(f._basename)}</span>
       <span class="tree-actions">

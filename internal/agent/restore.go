@@ -130,7 +130,7 @@ return fmt.Errorf("download blob: %w", err)
 }
 defer rc.Close()
 
-if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil { //nolint:gosec // outPath is abs-cleaned by callers
 return fmt.Errorf("create output dir: %w", err)
 }
 

@@ -259,27 +259,27 @@ func (h *handlers) handleRestoreFile(w http.ResponseWriter, r *http.Request, fil
 // POST /api/restore
 func (h *handlers) handleRestoreByPrefix(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	var body2 struct {
+	var req struct {
 		DisplayPrefix string `json:"display_prefix"`
 		OutPath       string `json:"out_path"`
 		VersionNum    int    `json:"version_num"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body2); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if body2.OutPath == "" {
+	if req.OutPath == "" {
 		writeError(w, http.StatusBadRequest, "out_path is required")
 		return
 	}
 
 	go func() {
-		if err := h.agent.RestoreByPrefix(context.Background(), body2.DisplayPrefix, body2.OutPath, body2.VersionNum); err != nil {
-			log.Printf("restore prefix %q error: %v", body2.DisplayPrefix, err)
+		if err := h.agent.RestoreByPrefix(context.Background(), req.DisplayPrefix, req.OutPath, req.VersionNum); err != nil {
+			log.Printf("restore prefix %q error: %v", req.DisplayPrefix, err)
 		}
 	}()
 
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "restore started", "out_path": body2.OutPath})
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "restore started", "out_path": req.OutPath})
 }
 
 // GET /api/schedules

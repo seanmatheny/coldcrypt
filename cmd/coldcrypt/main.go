@@ -29,7 +29,7 @@ import (
 // The returned function should be called with defer to close the file.
 func setupLogging() func() {
 	const logPath = "/var/log/coldcrypt.log"
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0640)
 	if err != nil {
 		log.Printf("warning: could not open log file %s: %v (logging to stderr only)", logPath, err)
 		return func() {}
