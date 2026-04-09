@@ -204,13 +204,17 @@ sudo install -o root -g root -m 755 coldcrypt /usr/local/bin/coldcrypt
 ```bash
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin coldcrypt
 
-# Config and data in /etc/coldcrypt and /var/lib/coldcrypt (adjust to taste)
-sudo mkdir -p /etc/coldcrypt /var/lib/coldcrypt
+# Config and data in /etc/coldcrypt and /var/lib/coldcrypt (adjust to taste).
+# The data and log directories (/var/lib/coldcrypt, /var/log/coldcrypt) are
+# created automatically by systemd when the service unit is installed thanks to
+# StateDirectory= and LogsDirectory=.  You only need to create the config dir
+# and initialise coldcrypt here.
+sudo mkdir -p /etc/coldcrypt
 sudo coldcrypt init /var/lib/coldcrypt
 sudo cp /var/lib/coldcrypt/config.json /etc/coldcrypt/config.json
 # Edit /etc/coldcrypt/config.json — set data_dir to /var/lib/coldcrypt
-sudo chown -R coldcrypt:coldcrypt /etc/coldcrypt /var/lib/coldcrypt
-sudo chmod 700 /etc/coldcrypt /var/lib/coldcrypt
+sudo chown -R coldcrypt:coldcrypt /etc/coldcrypt
+sudo chmod 700 /etc/coldcrypt
 ```
 
 ### 3. Set the web UI password
@@ -229,13 +233,20 @@ sudo cp contrib/coldcrypt.service /etc/systemd/system/coldcrypt.service
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now coldcrypt
+# systemd creates /var/lib/coldcrypt and /var/log/coldcrypt (owned by the
+# coldcrypt user) automatically on first start via StateDirectory= and
+# LogsDirectory= in the unit file.
 sudo systemctl status coldcrypt
 ```
 
 ### 5. View logs
 
 ```bash
+# systemd journal (primary log destination)
 sudo journalctl -u coldcrypt -f
+
+# File log written by the service (created automatically under LogsDirectory=)
+sudo tail -f /var/log/coldcrypt/coldcrypt.log
 ```
 
 ---
