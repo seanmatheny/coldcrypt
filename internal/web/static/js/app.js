@@ -6,7 +6,11 @@
 let currentSection = 'dashboard';
 let restoreFileID = null;
 let restoreVersionNum = null;
+let restoreDisplayPrefix = null;
 let jobRefreshTimer = null;
+
+// Tracks which directory paths are expanded in the tree view.
+const expandedDirs = new Set();
 
 // ── Bootstrap modal handles ────────────────────────────────────────────────
 let versionsModal, restoreModal, scheduleModal;
@@ -127,6 +131,13 @@ function bindGlobal() {
   document.getElementById('file-search').addEventListener('keydown', e => {
     if (e.key === 'Enter') loadFiles(document.getElementById('file-search').value);
   });
+  document.getElementById('file-clear-btn').addEventListener('click', () => {
+    document.getElementById('file-search').value = '';
+    loadFiles('');
+  });
+
+  // Restore All button
+  document.getElementById('files-restore-all-btn').addEventListener('click', () => promptRestoreDir(''));
 
   // Schedule add
   document.getElementById('schedule-add-btn').addEventListener('click', openScheduleModal);
@@ -167,14 +178,30 @@ async function loadDashboard() {
   });
 }
 
-// ── Files ──────────────────────────────────────────────────────────────────
+// ── Files – tree view ──────────────────────────────────────────────────────
 async function loadFiles(search = '') {
   const url = search ? `/api/files?search=${encodeURIComponent(search)}` : '/api/files';
   const files = await apiFetch(url) || [];
+
+  const treeEl = document.getElementById('files-tree');
+  const flatEl = document.getElementById('files-flat');
+
+  if (search) {
+    treeEl.classList.add('d-none');
+    flatEl.classList.remove('d-none');
+    renderFlatList(files);
+  } else {
+    flatEl.classList.add('d-none');
+    treeEl.classList.remove('d-none');
+    renderFileTree(files, treeEl);
+  }
+}
+
+function renderFlatList(files) {
   const tbody = document.getElementById('files-tbody');
   tbody.innerHTML = '';
   if (files.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="3" class="text-muted text-center py-3">No files found</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center py-3">No files found</td></tr>';
     return;
   }
   files.forEach(f => {
@@ -182,7 +209,6 @@ async function loadFiles(search = '') {
     tr.className = 'file-row';
     tr.innerHTML = `
       <td><i class="fa fa-file me-2 text-muted"></i>${esc(f.DisplayPath)}</td>
-      <td class="text-muted small">${esc(f.SourcePath)}</td>
       <td>
         <button class="btn btn-sm btn-outline-info py-0 px-2" onclick="showVersions(${f.ID}, '${esc(f.DisplayPath)}')">
           <i class="fa fa-clock-rotate-left me-1"></i>Versions
@@ -190,6 +216,103 @@ async function loadFiles(search = '') {
       </td>`;
     tbody.appendChild(tr);
   });
+}
+
+// Build a nested tree structure from a flat list of file entries.
+function buildFileTree(files) {
+  const root = { dirs: new Map(), files: [] };
+  for (const f of files) {
+    const parts = f.DisplayPath.split('/');
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const part = parts[i];
+      if (!node.dirs.has(part)) {
+        node.dirs.set(part, { dirs: new Map(), files: [] });
+      }
+      node = node.dirs.get(part);
+    }
+    node.files.push({ ...f, _basename: parts[parts.length - 1] });
+  }
+  return root;
+}
+
+function renderFileTree(files, container) {
+  container.innerHTML = '';
+  if (files.length === 0) {
+    container.innerHTML = '<div class="text-muted text-center py-4">No files backed up yet.</div>';
+    return;
+  }
+  const tree = buildFileTree(files);
+  renderTreeNode(tree, container, '', 0);
+}
+
+function renderTreeNode(node, container, pathPrefix, depth) {
+  const indent = depth * 20 + 8;
+
+  // Directories first, sorted alphabetically.
+  const dirEntries = [...node.dirs.entries()].sort(([a], [b]) => a.localeCompare(b));
+  for (const [name, subtree] of dirEntries) {
+    const fullPath = pathPrefix + name + '/';
+    const isExpanded = expandedDirs.has(fullPath);
+
+    const rowEl = document.createElement('div');
+    rowEl.className = 'tree-row tree-dir';
+    rowEl.style.paddingLeft = indent + 'px';
+    rowEl.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+    rowEl.innerHTML = `
+      <span class="tree-toggle" aria-hidden="true">${isExpanded ? '▾' : '▸'}</span>
+      <i class="fa ${isExpanded ? 'fa-folder-open' : 'fa-folder'} text-warning me-1 tree-folder-icon" aria-hidden="true"></i>
+      <span class="tree-name">${esc(name)}</span>
+      <span class="tree-actions">
+        <button class="btn btn-xs btn-outline-success ms-2"
+          title="Restore this directory"
+          onclick="event.stopPropagation(); promptRestoreDir('${esc(fullPath)}')">
+          <i class="fa fa-download me-1"></i>Restore
+        </button>
+      </span>`;
+
+    const childrenEl = document.createElement('div');
+    childrenEl.className = isExpanded ? '' : 'd-none';
+
+    rowEl.addEventListener('click', () => {
+      if (expandedDirs.has(fullPath)) {
+        expandedDirs.delete(fullPath);
+        rowEl.setAttribute('aria-expanded', 'false');
+        rowEl.querySelector('.tree-toggle').textContent = '▸';
+        rowEl.querySelector('.tree-folder-icon').className = 'fa fa-folder text-warning me-1 tree-folder-icon';
+        childrenEl.classList.add('d-none');
+      } else {
+        expandedDirs.add(fullPath);
+        rowEl.setAttribute('aria-expanded', 'true');
+        rowEl.querySelector('.tree-toggle').textContent = '▾';
+        rowEl.querySelector('.tree-folder-icon').className = 'fa fa-folder-open text-warning me-1 tree-folder-icon';
+        childrenEl.classList.remove('d-none');
+      }
+    });
+
+    container.appendChild(rowEl);
+    container.appendChild(childrenEl);
+    renderTreeNode(subtree, childrenEl, fullPath, depth + 1);
+  }
+
+  // Files, sorted alphabetically.
+  const fileEntries = [...node.files].sort((a, b) => a._basename.localeCompare(b._basename));
+  for (const f of fileEntries) {
+    const rowEl = document.createElement('div');
+    rowEl.className = 'tree-row tree-file';
+    rowEl.style.paddingLeft = indent + 'px';
+    rowEl.innerHTML = `
+      <span class="tree-toggle invisible" aria-hidden="true">▸</span>
+      <i class="fa fa-file text-muted me-1"></i>
+      <span class="tree-name">${esc(f._basename)}</span>
+      <span class="tree-actions">
+        <button class="btn btn-xs btn-outline-info ms-2"
+          onclick="event.stopPropagation(); showVersions(${f.ID}, '${esc(f.DisplayPath)}')">
+          <i class="fa fa-clock-rotate-left me-1"></i>Versions
+        </button>
+      </span>`;
+    container.appendChild(rowEl);
+  }
 }
 
 async function showVersions(fileID, displayPath) {
@@ -223,10 +346,30 @@ async function showVersions(fileID, displayPath) {
   });
 }
 
+// Prompt to restore a single file version.
 function promptRestore(fileID, versionNum, displayPath) {
   restoreFileID = fileID;
   restoreVersionNum = versionNum;
+  restoreDisplayPrefix = null;
   versionsModal.hide();
+  document.getElementById('restoreModalLabel').textContent = `Restore: ${displayPath}`;
+  document.getElementById('restore-path-hint').textContent =
+    'Enter the full path where the file should be restored. ' +
+    'If you enter a directory path, the original filename will be appended.';
+  document.getElementById('restore-out-path').value = '';
+  document.getElementById('restore-msg').classList.add('d-none');
+  restoreModal.show();
+}
+
+// Prompt to restore a whole directory (or everything when prefix is '').
+function promptRestoreDir(displayPrefix) {
+  restoreFileID = null;
+  restoreVersionNum = 0;
+  restoreDisplayPrefix = displayPrefix;
+  const label = displayPrefix ? `Restore directory: ${displayPrefix}` : 'Restore All Files';
+  document.getElementById('restoreModalLabel').textContent = label;
+  document.getElementById('restore-path-hint').textContent =
+    'Enter the root output directory. All files will be restored here, preserving their directory structure.';
   document.getElementById('restore-out-path').value = '';
   document.getElementById('restore-msg').classList.add('d-none');
   restoreModal.show();
@@ -238,13 +381,29 @@ async function doRestore() {
     showMsg('restore-msg', 'Please enter an output path.', 'danger');
     return;
   }
-  const r = await fetch(`/api/files/${restoreFileID}/restore`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ version_num: restoreVersionNum, out_path: outPath })
-  });
+
+  let r;
+  if (restoreFileID !== null) {
+    // Single-file restore.
+    r = await fetch(`/api/files/${restoreFileID}/restore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version_num: restoreVersionNum, out_path: outPath })
+    });
+  } else {
+    // Directory / bulk restore.
+    r = await fetch('/api/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ display_prefix: restoreDisplayPrefix || '', out_path: outPath, version_num: 0 })
+    });
+  }
+
   if (r.ok) {
-    showMsg('restore-msg', `Restore started. File will appear at: ${outPath}`, 'success');
+    const msg = restoreFileID !== null
+      ? `Restore started. File will appear at: ${outPath}`
+      : `Restore started. Files will appear in: ${outPath}`;
+    showMsg('restore-msg', msg, 'success');
     setTimeout(() => restoreModal.hide(), 2000);
   } else {
     const d = await r.json().catch(() => ({ error: 'Restore failed' }));

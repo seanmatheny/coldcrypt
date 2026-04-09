@@ -212,6 +212,57 @@
       font-weight: 600;
       color: #c9d1d9;
     }
+
+    /* File tree */
+    .file-tree {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .tree-row {
+      display: flex;
+      align-items: center;
+      padding: 0.35rem 0.5rem;
+      border-bottom: 1px solid #21262d;
+      gap: 0.3rem;
+      transition: background 0.1s;
+      min-height: 36px;
+    }
+
+    .tree-row:last-child { border-bottom: none; }
+    .tree-row:hover { background: #1c2128; }
+    .tree-dir { cursor: pointer; user-select: none; }
+
+    .tree-toggle {
+      width: 14px;
+      text-align: center;
+      font-size: 0.7rem;
+      color: #8b949e;
+      flex-shrink: 0;
+    }
+
+    .tree-toggle.invisible { visibility: hidden; }
+
+    .tree-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.88rem;
+    }
+
+    .tree-dir .tree-name { color: #c9d1d9; font-weight: 500; }
+    .tree-file .tree-name { color: #8b949e; }
+
+    .tree-actions { margin-left: auto; flex-shrink: 0; }
+
+    .btn-xs {
+      font-size: 0.72rem;
+      padding: 0.1rem 0.4rem;
+      line-height: 1.4;
+    }
   </style>
 </head>
 <body>
@@ -326,19 +377,26 @@
       <div class="section" id="section-files">
         <div class="section-header">
           <h4><i class="fa fa-folder-open me-2"></i>Files</h4>
+          <button class="btn btn-sm btn-outline-success" id="files-restore-all-btn" title="Restore all backed-up files">
+            <i class="fa fa-download me-1"></i>Restore All
+          </button>
         </div>
-        <div class="mb-3 d-flex gap-2">
-          <input type="text" id="file-search" class="form-control" placeholder="Search files..." style="max-width:320px;" />
+        <div class="mb-3 d-flex gap-2 align-items-center">
+          <input type="text" id="file-search" class="form-control" placeholder="Search files…" style="max-width:320px;" />
           <button class="btn btn-outline-secondary" id="file-search-btn">
             <i class="fa fa-search"></i>
           </button>
+          <button class="btn btn-outline-secondary" id="file-clear-btn" title="Clear search">
+            <i class="fa fa-times"></i>
+          </button>
         </div>
-        <div class="table-dark-custom">
+        <!-- Tree view (default) -->
+        <div id="files-tree" class="file-tree"></div>
+        <!-- Flat list (shown when searching) -->
+        <div id="files-flat" class="table-dark-custom d-none">
           <table class="table table-dark mb-0">
             <thead>
-              <tr>
-                <th>Path</th><th>Source</th><th>Actions</th>
-              </tr>
+              <tr><th>Path</th><th>Actions</th></tr>
             </thead>
             <tbody id="files-tbody"></tbody>
           </table>
@@ -459,14 +517,15 @@
   <div class="modal-dialog">
     <div class="modal-content" style="background:#161b22;border:1px solid #30363d;">
       <div class="modal-header border-0">
-        <h5 class="modal-title">Restore File</h5>
+        <h5 class="modal-title" id="restoreModalLabel">Restore</h5>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
+        <div class="text-muted small mb-3" id="restore-path-hint"></div>
         <div class="mb-3">
           <label class="form-label small">Output Path</label>
           <input type="text" id="restore-out-path" class="form-control"
-            placeholder="/home/user/restored/filename.txt" />
+            placeholder="/home/user/restored/" />
         </div>
         <div id="restore-msg" class="small d-none"></div>
       </div>
