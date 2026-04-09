@@ -240,7 +240,16 @@ func (h *handlers) handleDownloadFile(w http.ResponseWriter, r *http.Request, fi
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	versionNum, _ := strconv.Atoi(r.URL.Query().Get("version_num"))
+	versionParam := r.URL.Query().Get("version_num")
+	var versionNum int
+	if versionParam != "" {
+		var parseErr error
+		versionNum, parseErr = strconv.Atoi(versionParam)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid version_num")
+			return
+		}
+	}
 
 	var buf bytes.Buffer
 	filename, err := h.agent.DownloadFile(r.Context(), fileID, versionNum, &buf)

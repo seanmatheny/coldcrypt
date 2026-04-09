@@ -125,6 +125,7 @@ func (a *Agent) DownloadFile(ctx context.Context, fileID int64, versionNum int, 
 
 	var blobID string
 	if versionNum == 0 {
+		// 0 means latest (versions are ordered newest first).
 		blobID = versions[0].BlobID
 	} else {
 		for _, v := range versions {
@@ -134,11 +135,7 @@ func (a *Agent) DownloadFile(ctx context.Context, fileID int64, versionNum int, 
 			}
 		}
 		if blobID == "" {
-			idx := versionNum - 1
-			if idx < 0 || idx >= len(versions) {
-				return "", fmt.Errorf("version %d not found for file %d", versionNum, fileID)
-			}
-			blobID = versions[idx].BlobID
+			return "", fmt.Errorf("version %d not found for file %d", versionNum, fileID)
 		}
 	}
 
