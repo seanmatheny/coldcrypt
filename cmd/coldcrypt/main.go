@@ -52,6 +52,8 @@ func main() {
 		cmdServe(os.Args[2:])
 	case "backup":
 		cmdBackup(os.Args[2:])
+	case "db-dump":
+		cmdDBDump(os.Args[2:])
 	case "change-password":
 		cmdChangePassword(os.Args[2:])
 	default:
@@ -68,6 +70,7 @@ Usage:
   coldcrypt init <data-dir>             Initialize a new data directory
   coldcrypt serve [--config path]       Start web server and scheduler
   coldcrypt backup [--config path] [dirs...]  Run a one-off backup
+  coldcrypt db-dump [--config path] --out <file>  Dump a copy of the database
   coldcrypt change-password [--config path]   Change the web UI password
 `)
 }
@@ -210,6 +213,33 @@ func cmdBackup(args []string) {
 		_ = database.UpdateJob(jobID, "failed", 0, 0, err.Error())
 		os.Exit(1)
 	}
+}
+
+// ── db-dump ────────────────────────────────────────────────────────────────
+
+func cmdDBDump(args []string) {
+	fs := flag.NewFlagSet("db-dump", flag.ExitOnError)
+	cfgPath := fs.String("config", "", "path to config.json")
+	outPath := fs.String("out", "", "destination file for the database copy (required)")
+	_ = fs.Parse(args)
+
+	if *outPath == "" {
+		fmt.Fprintln(os.Stderr, "usage: coldcrypt db-dump --config <path> --out <file>")
+		os.Exit(1)
+	}
+
+	cfg, _ := loadConfig(*cfgPath)
+
+	database, err := db.New(cfg.DataDir)
+	if err != nil {
+		log.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	if err := database.Backup(*outPath); err != nil {
+		log.Fatalf("db-dump: %v", err)
+	}
+	fmt.Printf("Database backed up to: %s\n", *outPath)
 }
 
 // ── change-password ────────────────────────────────────────────────────────

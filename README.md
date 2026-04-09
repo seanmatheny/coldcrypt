@@ -142,8 +142,36 @@ coldcrypt serve [--config path]
 coldcrypt backup [--config path] [dir1 dir2 ...]
     Run a one-off backup. Uses source_dirs from config if no dirs specified.
 
+coldcrypt db-dump --out <file> [--config path]
+    Create a consistent copy of the SQLite database at the given path.
+    Safe to run while the server is running (uses SQLite VACUUM INTO).
+    Ideal for crontab-based database backups — see examples below.
+
 coldcrypt change-password [--config path]
     Interactively set the web UI password (uses bcrypt).
+```
+
+### Database backups
+
+Coldcrypt stores all file metadata (hashes, blob IDs, job history, schedules) in a
+single SQLite file at `<data_dir>/coldcrypt.db`. It is a good idea to back this file
+up independently of your encrypted blobs.
+
+The `db-dump` command creates a clean, consistent snapshot using SQLite's
+`VACUUM INTO` — it is safe to run while `coldcrypt serve` is running.
+
+**Manual dump:**
+```bash
+coldcrypt db-dump --config ~/.coldcrypt/config.json \
+                  --out /backup/coldcrypt-$(date +%Y%m%d).db
+```
+
+**Daily crontab entry** (runs at 03:00, keeps 30 days of dumps):
+```cron
+0 3 * * * /usr/local/bin/coldcrypt db-dump \
+              --config /etc/coldcrypt/config.json \
+              --out /backup/coldcrypt-$(date +\%Y\%m\%d).db && \
+          find /backup -name 'coldcrypt-*.db' -mtime +30 -delete
 ```
 
 ---
@@ -157,6 +185,58 @@ After signing in at `http(s)://localhost:8443`:
 - **Jobs** — full backup job history with status badges (green=completed, yellow=running, red=failed); auto-refreshes for running jobs
 - **Schedules** — add/edit/delete cron-based schedules; examples provided for common intervals
 - **Settings** — edit remote server config, source directories, and change the web UI password
+
+---
+
+## Running as a systemd service
+
+A ready-made unit file is provided in `contrib/coldcrypt.service`.
+
+### 1. Install the binary
+
+```bash
+go build ./cmd/coldcrypt/
+sudo install -o root -g root -m 755 coldcrypt /usr/local/bin/coldcrypt
+```
+
+### 2. Create a dedicated user and directories
+
+```bash
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin coldcrypt
+
+# Config and data in /etc/coldcrypt and /var/lib/coldcrypt (adjust to taste)
+sudo mkdir -p /etc/coldcrypt /var/lib/coldcrypt
+sudo coldcrypt init /var/lib/coldcrypt
+sudo cp /var/lib/coldcrypt/config.json /etc/coldcrypt/config.json
+# Edit /etc/coldcrypt/config.json — set data_dir to /var/lib/coldcrypt
+sudo chown -R coldcrypt:coldcrypt /etc/coldcrypt /var/lib/coldcrypt
+sudo chmod 700 /etc/coldcrypt /var/lib/coldcrypt
+```
+
+### 3. Set the web UI password
+
+```bash
+sudo -u coldcrypt coldcrypt change-password --config /etc/coldcrypt/config.json
+```
+
+### 4. Install and enable the unit
+
+```bash
+sudo cp contrib/coldcrypt.service /etc/systemd/system/coldcrypt.service
+
+# If your source directories are outside /home or /srv/data, uncomment and
+# edit the ReadOnlyPaths= line in the unit file first.
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now coldcrypt
+sudo systemctl status coldcrypt
+```
+
+### 5. View logs
+
+```bash
+sudo journalctl -u coldcrypt -f
+```
 
 ---
 

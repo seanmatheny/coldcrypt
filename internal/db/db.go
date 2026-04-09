@@ -482,3 +482,14 @@ func (d *DB) UpdateScheduleLastRun(id int64) error {
 	)
 	return err
 }
+
+// Backup creates a consistent copy of the database at destPath using SQLite's
+// VACUUM INTO command. It is safe to call while the database is open and being
+// written to (WAL mode ensures a consistent snapshot).
+func (d *DB) Backup(destPath string) error {
+	_, err := d.conn.Exec(`VACUUM INTO ?`, destPath)
+	if err != nil {
+		return fmt.Errorf("vacuum into %s: %w", destPath, err)
+	}
+	return nil
+}
