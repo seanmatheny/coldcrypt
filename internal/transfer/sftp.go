@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -44,9 +45,9 @@ func NewClient(host string, port int, user, keyPath, password string) (*Client, 
 	sshCfg := &ssh.ClientConfig{
 		User: user,
 		Auth: authMethods,
-		// Accept any host key. For production, use a known_hosts file.
+		// Accept any host key. For production, replace with a known_hosts-based callback.
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec
-		Timeout:         30_000_000_000, // 30 seconds
+		Timeout:         30 * time.Second,
 	}
 
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))

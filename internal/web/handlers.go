@@ -27,6 +27,7 @@ type handlers struct {
 	agent    *agent.Agent
 	sched    *scheduler.Scheduler
 	sessions *SessionStore
+	tlsMode  bool // whether server is running with TLS
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -73,6 +74,7 @@ func (h *handlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    sid,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   h.tlsMode,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   int(24 * time.Hour / time.Second),
 	})
@@ -90,10 +92,13 @@ func (h *handlers) handleLogout(w http.ResponseWriter, r *http.Request) {
 		h.sessions.DeleteSession(cookie.Value)
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:   sessionCookie,
-		Value:  "",
-		Path:   "/",
-		MaxAge: -1,
+		Name:     sessionCookie,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   h.tlsMode,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
 	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

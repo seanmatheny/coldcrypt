@@ -85,7 +85,6 @@ func (s *Scheduler) loadSchedules() error {
 		if !sched.Enabled {
 			continue
 		}
-		sched := sched // capture loop variable
 		entryID, err := s.cron.AddFunc(sched.CronExpr, func() {
 			s.runSchedule(sched.ID, sched.Name, sched.SourceDirs)
 		})

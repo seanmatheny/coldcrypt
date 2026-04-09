@@ -47,6 +47,7 @@ func (s *Server) Start() error {
 		agent:    s.agent,
 		sched:    s.sched,
 		sessions: NewSessionStore(),
+		tlsMode:  s.cfg.WebTLSCert != "" && s.cfg.WebTLSKey != "",
 	}
 	h.registerRoutes(mux)
 

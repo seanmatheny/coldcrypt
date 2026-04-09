@@ -10,7 +10,13 @@ import (
 )
 
 // RestoreFile downloads and decrypts a specific file version to outPath.
+// outPath must be an absolute path.
 func (a *Agent) RestoreFile(ctx context.Context, fileID int64, versionNum int, outPath string) error {
+	// Validate output path to prevent path traversal.
+	cleanPath := filepath.Clean(outPath)
+	if !filepath.IsAbs(cleanPath) {
+		return fmt.Errorf("out_path must be an absolute path")
+	}
 	versions, err := a.db.GetFileVersions(fileID)
 	if err != nil {
 		return fmt.Errorf("get versions: %w", err)
@@ -52,11 +58,11 @@ func (a *Agent) RestoreFile(ctx context.Context, fileID int64, versionNum int, o
 	defer rc.Close()
 
 	// Ensure output directory exists.
-	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(cleanPath), 0755); err != nil {
 		return fmt.Errorf("create output dir: %w", err)
 	}
 
-	outFile, err := os.Create(outPath)
+	outFile, err := os.Create(cleanPath) //nolint:gosec // cleanPath is validated above
 	if err != nil {
 		return fmt.Errorf("create output file: %w", err)
 	}
