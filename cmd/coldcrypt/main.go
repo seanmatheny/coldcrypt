@@ -254,6 +254,9 @@ func loadConfig(cfgPath string) (*config.Config, string) {
 	return cfg, absPath
 }
 
+// stdinReader is a shared buffered reader for non-terminal stdin input.
+var stdinReader = bufio.NewReader(os.Stdin)
+
 // promptPassword reads a password from the terminal (no echo).
 func promptPassword(prompt string) string {
 	fmt.Print(prompt)
@@ -266,8 +269,7 @@ func promptPassword(prompt string) string {
 		}
 		return strings.TrimRight(string(pw), "\r\n")
 	}
-	// Fall back to buffered reader (e.g., piped input)
-	reader := bufio.NewReader(os.Stdin)
-	pw, _ := reader.ReadString('\n')
+	// Fall back to shared buffered reader (e.g., piped input in tests)
+	pw, _ := stdinReader.ReadString('\n')
 	return strings.TrimRight(pw, "\r\n")
 }
