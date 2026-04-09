@@ -1,0 +1,37 @@
+[Unit]
+Description=Coldcrypt encrypted backup manager
+Documentation=https://github.com/seanmatheny/coldcrypt
+After=network.target
+
+[Service]
+Type=simple
+# Run as a dedicated user for isolation. Create with:
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin coldcrypt
+User=coldcrypt
+Group=coldcrypt
+
+# Adjust these paths to match your installation.
+ExecStart=/usr/local/bin/coldcrypt serve --config /etc/coldcrypt/config.json
+
+Restart=on-failure
+RestartSec=10
+
+# Give the service permission to read source directories and write the data
+# directory. The config file and data dir must be owned/readable by the
+# coldcrypt user:
+#   sudo chown -R coldcrypt:coldcrypt /etc/coldcrypt /var/lib/coldcrypt
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=coldcrypt
+
+# Harden the service where possible.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/coldcrypt /var/log
+ReadOnlyPaths=/etc/coldcrypt
+# Uncomment and list the directories you are backing up so the service can
+# read them. Example:
+# ReadOnlyPaths=/home /srv/data
+
+[Install]
+WantedBy=multi-user.target
