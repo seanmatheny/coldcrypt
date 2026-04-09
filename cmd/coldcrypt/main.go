@@ -25,10 +25,10 @@ import (
 
 
 // setupLogging configures the standard logger to write to both stderr and a log
-// file in /var/log. If the log file cannot be opened, only stderr is used.
+// file. If the log file cannot be opened, only stderr is used.
 // The returned function should be called with defer to close the file.
 func setupLogging() func() {
-	const logPath = "/var/log/coldcrypt.log"
+	const logPath = "/var/log/coldcrypt/coldcrypt.log"
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0640)
 	if err != nil {
 		log.Printf("warning: could not open log file %s: %v (logging to stderr only)", logPath, err)

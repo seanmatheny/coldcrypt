@@ -27,7 +27,11 @@ SyslogIdentifier=coldcrypt
 # Harden the service where possible.
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/coldcrypt /var/log
+# StateDirectory and LogsDirectory create /var/lib/coldcrypt and
+# /var/log/coldcrypt (owned by the service user) and implicitly add them to
+# ReadWritePaths, so no explicit ReadWritePaths entry is needed for them.
+StateDirectory=coldcrypt
+LogsDirectory=coldcrypt
 ReadOnlyPaths=/etc/coldcrypt
 # Uncomment and list the directories you are backing up so the service can
 # read them. Example:

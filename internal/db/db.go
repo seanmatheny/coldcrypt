@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -99,6 +100,12 @@ CREATE TABLE IF NOT EXISTS schedules (
 
 // New opens or creates the SQLite database in dataDir.
 func New(dataDir string) (*DB, error) {
+	if dataDir == "" {
+		return nil, errors.New("data_dir is not set in config; run 'coldcrypt init <data-dir>' and set data_dir in config.json")
+	}
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		return nil, fmt.Errorf("create data directory %q (check permissions): %w", dataDir, err)
+	}
 	path := filepath.Join(dataDir, "coldcrypt.db")
 	conn, err := sql.Open("sqlite", path)
 	if err != nil {
