@@ -3,7 +3,6 @@ package agent
 import (
 "context"
 "fmt"
-"io"
 "log"
 "os"
 "path/filepath"
@@ -91,64 +90,6 @@ log.Printf("restored: %s -> %s", f.DisplayPath, dest)
 
 log.Printf("restore prefix %q done: %d files, %d errors", displayPrefix, len(files), errCount)
 return nil
-}
-
-// DownloadFile downloads and decrypts a specific file version, writing the
-// plaintext to dst. It returns the original base filename so the caller can set
-// an appropriate Content-Disposition header.
-func (a *Agent) DownloadFile(ctx context.Context, fileID int64, versionNum int, dst io.Writer) (string, error) {
-	fileEntry, err := a.db.GetFileByID(fileID)
-	if err != nil {
-		return "", fmt.Errorf("get file entry: %w", err)
-	}
-	filename := filepath.Base(fileEntry.SourcePath)
-
-	client, err := transfer.NewClient(
-		a.cfg.RemoteHost,
-		a.cfg.RemotePort,
-		a.cfg.RemoteUser,
-		a.cfg.RemoteKeyPath,
-		a.cfg.RemotePassword,
-	)
-	if err != nil {
-		return "", fmt.Errorf("sftp connect: %w", err)
-	}
-	defer client.Close()
-
-	versions, err := a.db.GetFileVersions(fileID)
-	if err != nil {
-		return "", fmt.Errorf("get versions: %w", err)
-	}
-	if len(versions) == 0 {
-		return "", fmt.Errorf("no versions for file %d", fileID)
-	}
-
-	var blobID string
-	if versionNum == 0 {
-		// 0 means latest (versions are ordered newest first).
-		blobID = versions[0].BlobID
-	} else {
-		for _, v := range versions {
-			if v.VersionNum == versionNum {
-				blobID = v.BlobID
-				break
-			}
-		}
-		if blobID == "" {
-			return "", fmt.Errorf("version %d not found for file %d", versionNum, fileID)
-		}
-	}
-
-	rc, err := client.DownloadBlob(a.cfg.RemoteBasePath, blobID)
-	if err != nil {
-		return "", fmt.Errorf("download blob: %w", err)
-	}
-	defer rc.Close()
-
-	if err := DecryptFile(a.key, rc, dst); err != nil {
-		return "", fmt.Errorf("decrypt: %w", err)
-	}
-	return filename, nil
 }
 
 // restoreOne downloads and decrypts a single file version using an existing
