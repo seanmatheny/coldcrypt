@@ -54,6 +54,8 @@ func main() {
 		cmdBackup(os.Args[2:])
 	case "db-dump":
 		cmdDBDump(os.Args[2:])
+	case "db-restore":
+		cmdDBRestore(os.Args[2:])
 	case "change-password":
 		cmdChangePassword(os.Args[2:])
 	default:
@@ -71,6 +73,7 @@ Usage:
   coldcrypt serve [--config path]       Start web server and scheduler
   coldcrypt backup [--config path] [dirs...]  Run a one-off backup
   coldcrypt db-dump [--config path] --out <file>  Dump a copy of the database
+  coldcrypt db-restore [--config path] --from <file>  Restore a database dump
   coldcrypt change-password [--config path]   Change the web UI password
 `)
 }
@@ -242,7 +245,71 @@ func cmdDBDump(args []string) {
 	fmt.Printf("Database backed up to: %s\n", *outPath)
 }
 
-// ── change-password ────────────────────────────────────────────────────────
+// ── db-restore ─────────────────────────────────────────────────────────────
+
+func cmdDBRestore(args []string) {
+	fs := flag.NewFlagSet("db-restore", flag.ExitOnError)
+	cfgPath := fs.String("config", "", "path to config.json")
+	fromPath := fs.String("from", "", "path to the database dump to restore (required)")
+	yes := fs.Bool("yes", false, "skip confirmation prompt")
+	_ = fs.Parse(args)
+
+	if *fromPath == "" {
+		fmt.Fprintln(os.Stderr, "usage: coldcrypt db-restore --config <path> --from <dump-file>")
+		os.Exit(1)
+	}
+
+	if _, err := os.Stat(*fromPath); err != nil {
+		log.Fatalf("dump file not found: %v", err)
+	}
+
+	cfg, _ := loadConfig(*cfgPath)
+	destPath := filepath.Join(cfg.DataDir, "coldcrypt.db")
+
+	if !*yes {
+		fmt.Printf("WARNING: This will overwrite %s with %s.\n", destPath, *fromPath)
+		fmt.Print("Ensure the server is stopped before proceeding. Continue? [y/N] ")
+		var answer string
+		_, _ = fmt.Fscanln(stdinReader, &answer)
+		if strings.ToLower(strings.TrimSpace(answer)) != "y" {
+			fmt.Println("Aborted.")
+			os.Exit(0)
+		}
+	}
+
+	if err := copyFile(*fromPath, destPath); err != nil {
+		log.Fatalf("db-restore: %v", err)
+	}
+
+	// Remove stale WAL and SHM files left over from the previous database.
+	for _, ext := range []string{"-wal", "-shm"} {
+		_ = os.Remove(destPath + ext)
+	}
+
+	fmt.Printf("Database restored from %s to %s\n", *fromPath, destPath)
+}
+
+// copyFile copies the file at src to dst, creating or truncating dst.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open source: %w", err)
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("open destination: %w", err)
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return fmt.Errorf("copy: %w", err)
+	}
+	return out.Sync()
+}
+
+
 
 func cmdChangePassword(args []string) {
 	fs := flag.NewFlagSet("change-password", flag.ExitOnError)
