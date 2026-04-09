@@ -40,7 +40,12 @@ return fmt.Errorf("sftp connect: %w", err)
 }
 defer client.Close()
 
-return a.restoreOne(ctx, client, fileID, versionNum, cleanPath)
+if err := a.restoreOne(ctx, client, fileID, versionNum, cleanPath); err != nil {
+log.Printf("restore file %d error: %v", fileID, err)
+return err
+}
+log.Printf("restored file %d -> %s", fileID, cleanPath)
+return nil
 }
 
 // RestoreByPrefix downloads and decrypts all files whose display_path starts

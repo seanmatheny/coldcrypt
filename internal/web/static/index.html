@@ -258,22 +258,6 @@
 
     .tree-actions { margin-left: auto; flex-shrink: 0; }
 
-    /* Snowflake animation */
-    @keyframes snowfall {
-      0%   { transform: translateY(-20px) rotate(0deg);   opacity: 0.9; }
-      100% { transform: translateY(110vh) rotate(540deg); opacity: 0; }
-    }
-
-    .snowflake {
-      position: fixed;
-      top: -20px;
-      color: #a8d8f0;
-      pointer-events: none;
-      z-index: 0;
-      user-select: none;
-      animation: snowfall linear infinite;
-    }
-
     /* Graveyard scene strip on login card */
     .graveyard-scene {
       font-size: 1.6rem;
@@ -616,25 +600,5 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="/static/js/app.js"></script>
-<script>
-/* Snowflake generator – cold theme */
-(function () {
-  const FLAKES = ['❄', '❅', '❆', '✻', '✼'];
-  const COUNT  = 18;
-  // Size range: 0.6–1.4rem; duration: 6–14 s; delay: 0–10 s
-  for (let i = 0; i < COUNT; i++) {
-    const el = document.createElement('span');
-    el.className = 'snowflake';
-    el.textContent = FLAKES[Math.floor(Math.random() * FLAKES.length)];
-    const size = (Math.random() * 0.8 + 0.6).toFixed(2);  // 0.6–1.4rem
-    el.style.fontSize   = size + 'rem';
-    el.style.left       = (Math.random() * 98) + 'vw';
-    el.style.animationDuration  = (Math.random() * 8 + 6) + 's';   // 6–14 s
-    el.style.animationDelay     = (Math.random() * 10) + 's';       // 0–10 s
-    el.style.opacity    = (Math.random() * 0.5 + 0.3).toFixed(2);
-    document.body.appendChild(el);
-  }
-}());
-</script>
 </body>
 </html>

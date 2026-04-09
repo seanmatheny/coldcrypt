@@ -8,6 +8,7 @@ let restoreFileID = null;
 let restoreVersionNum = null;
 let restoreDisplayPrefix = null;
 let jobRefreshTimer = null;
+let serverDataDir = '';  // populated after login; used as default restore path
 
 // Tracks which directory paths are expanded in the tree view.
 const expandedDirs = new Set();
@@ -49,6 +50,10 @@ function showLogin() {
 function showApp() {
   document.getElementById('login-page').style.display = 'none';
   document.getElementById('app').classList.remove('d-none');
+  // Cache the server's data directory so restore modals can suggest a writable default path.
+  fetch('/api/config').then(r => r.ok ? r.json() : null).then(cfg => {
+    if (cfg && cfg.data_dir) serverDataDir = cfg.data_dir;
+  }).catch(() => {});
   navigateTo('dashboard');
 }
 
@@ -354,9 +359,9 @@ function promptRestore(fileID, versionNum, displayPath) {
   versionsModal.hide();
   document.getElementById('restoreModalLabel').textContent = `Restore: ${displayPath}`;
   document.getElementById('restore-path-hint').textContent =
-    'Enter the full path where the file should be restored. ' +
+    'Enter the full path on this machine where the file should be restored. ' +
     'If you enter a directory path, the original filename will be appended.';
-  document.getElementById('restore-out-path').value = '';
+  document.getElementById('restore-out-path').value = '/Universe/Customs';
   document.getElementById('restore-msg').classList.add('d-none');
   restoreModal.show();
 }
@@ -369,8 +374,8 @@ function promptRestoreDir(displayPrefix) {
   const label = displayPrefix ? `Restore directory: ${displayPrefix}` : 'Restore All Files';
   document.getElementById('restoreModalLabel').textContent = label;
   document.getElementById('restore-path-hint').textContent =
-    'Enter the root output directory. All files will be restored here, preserving their directory structure.';
-  document.getElementById('restore-out-path').value = '';
+    'Enter the root output directory on this machine. All files will be restored here, preserving their directory structure.';
+  document.getElementById('restore-out-path').value = '/Universe/Customs';
   document.getElementById('restore-msg').classList.add('d-none');
   restoreModal.show();
 }
