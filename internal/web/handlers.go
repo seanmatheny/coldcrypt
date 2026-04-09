@@ -20,6 +20,9 @@ import (
 
 const sessionCookie = "coldcrypt_session"
 
+// maxBodyBytes limits request bodies to 1 MiB to prevent DoS.
+const maxBodyBytes = 1 << 20
+
 type handlers struct {
 	cfg      *config.Config
 	cfgPath  string
@@ -40,15 +43,25 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-func (h *handlers) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+// securityHeaders adds common security headers to every response.
+func securityHeaders(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		next(w, r)
+	}
+}
+
+func (h *handlers) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return securityHeaders(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(sessionCookie)
 		if err != nil || !h.sessions.ValidateSession(cookie.Value) {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		next(w, r)
-	}
+	})
 }
 
 // POST /api/auth/login
@@ -57,6 +70,7 @@ func (h *handlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var body struct {
 		Password string `json:"password"`
 	}
@@ -109,6 +123,7 @@ func (h *handlers) handleChangePassword(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var body struct {
 		Password string `json:"password"`
 	}
@@ -154,6 +169,7 @@ func (h *handlers) handleGetJob(w http.ResponseWriter, r *http.Request, id int64
 
 // POST /api/jobs
 func (h *handlers) handleCreateJob(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var body struct {
 		SourceDirs []string `json:"source_dirs"`
 	}
@@ -218,6 +234,7 @@ func (h *handlers) handleGetFileVersions(w http.ResponseWriter, r *http.Request,
 
 // POST /api/files/:id/restore
 func (h *handlers) handleRestoreFile(w http.ResponseWriter, r *http.Request, fileID int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var body struct {
 		VersionNum int    `json:"version_num"`
 		OutPath    string `json:"out_path"`
@@ -259,6 +276,7 @@ func (h *handlers) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/schedules
 func (h *handlers) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var body struct {
 		Name       string   `json:"name"`
 		CronExpr   string   `json:"cron_expr"`
@@ -285,6 +303,7 @@ func (h *handlers) handleCreateSchedule(w http.ResponseWriter, r *http.Request) 
 
 // PUT /api/schedules/:id
 func (h *handlers) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, id int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var body struct {
 		Name       string   `json:"name"`
 		CronExpr   string   `json:"cron_expr"`
@@ -337,6 +356,7 @@ func (h *handlers) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 
 // PUT /api/config
 func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var body struct {
 		RemoteHost     string   `json:"remote_host"`
 		RemotePort     int      `json:"remote_port"`
@@ -411,7 +431,7 @@ func parseIDFromPath(path, prefix, suffix string) (int64, bool) {
 // registerRoutes wires all API handlers onto the provided mux.
 func (h *handlers) registerRoutes(mux *http.ServeMux) {
 	// Auth
-	mux.HandleFunc("/api/auth/login", h.handleLogin)
+	mux.HandleFunc("/api/auth/login", securityHeaders(h.handleLogin))
 	mux.HandleFunc("/api/auth/logout", h.requireAuth(h.handleLogout))
 	mux.HandleFunc("/api/auth/change-password", h.requireAuth(h.handleChangePassword))
 
