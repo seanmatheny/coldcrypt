@@ -361,7 +361,7 @@ function promptRestore(fileID, versionNum, displayPath) {
   document.getElementById('restore-path-hint').textContent =
     'Enter the full path on this machine where the file should be restored. ' +
     'If you enter a directory path, the original filename will be appended.';
-  document.getElementById('restore-out-path').value = serverDataDir ? serverDataDir + '/restore/' : '';
+  document.getElementById('restore-out-path').value = '/Universe/Customs';
   document.getElementById('restore-msg').classList.add('d-none');
   restoreModal.show();
 }
@@ -375,7 +375,7 @@ function promptRestoreDir(displayPrefix) {
   document.getElementById('restoreModalLabel').textContent = label;
   document.getElementById('restore-path-hint').textContent =
     'Enter the root output directory on this machine. All files will be restored here, preserving their directory structure.';
-  document.getElementById('restore-out-path').value = serverDataDir ? serverDataDir + '/restore/' : '';
+  document.getElementById('restore-out-path').value = '/Universe/Customs';
   document.getElementById('restore-msg').classList.add('d-none');
   restoreModal.show();
 }
