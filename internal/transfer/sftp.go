@@ -6,19 +6,22 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
-// Client wraps an SFTP connection.
+// Client wraps an SSH connection. Bulk data transfers use raw SSH exec sessions
+// (cat / cat >) for SCP-like throughput. The embedded SFTP sub-client is used
+// only for metadata operations (mkdir, remove).
 type Client struct {
 	sshConn *ssh.Client
 	sftp    *sftp.Client
 }
 
-// NewClient creates a new SFTP client using SSH key or password authentication.
+// NewClient creates a new client using SSH key or password authentication.
 func NewClient(host string, port int, user, keyPath, password string) (*Client, error) {
 	var authMethods []ssh.AuthMethod
 
@@ -56,10 +59,7 @@ func NewClient(host string, port int, user, keyPath, password string) (*Client, 
 		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
 
-	sftpClient, err := sftp.NewClient(conn,
-		sftp.UseConcurrentWrites(true),
-		sftp.UseConcurrentReads(true),
-	)
+	sftpClient, err := sftp.NewClient(conn)
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("sftp new client: %w", err)
@@ -68,7 +68,7 @@ func NewClient(host string, port int, user, keyPath, password string) (*Client, 
 	return &Client{sshConn: conn, sftp: sftpClient}, nil
 }
 
-// Close closes the SFTP and SSH connections.
+// Close closes the SFTP sub-client and the underlying SSH connection.
 func (c *Client) Close() error {
 	if err := c.sftp.Close(); err != nil {
 		return err
@@ -87,21 +87,68 @@ func blobShard(blobID string) string {
 	return blobID[:1]
 }
 
-// UploadBlob uploads data from r to the remote path/<shard>/blobID.
-// The shard subdirectory is created automatically if it does not exist.
+// shellQuote returns a single-quoted string that is safe to embed in a POSIX
+// shell command. It handles embedded single-quotes by ending the single-quoted
+// segment, inserting an escaped quote, and reopening the single-quoted segment.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// validateBlobID returns an error if blobID is not in the expected UUID format
+// (32 hex digits and 4 hyphens). This is a defence-in-depth check to ensure
+// that blob IDs used in shell commands contain only safe characters, regardless
+// of how the ID was generated.
+func validateBlobID(blobID string) error {
+	for _, r := range blobID {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') || r == '-') {
+			return fmt.Errorf("invalid blob ID character %q in %q", r, blobID)
+		}
+	}
+	return nil
+}
+
+// UploadBlob streams data from r to remotePath/<shard>/blobID using an SSH
+// exec session running "cat >" on the remote side. This bypasses SFTP packet
+// overhead and achieves throughput comparable to SCP.
+// The shard subdirectory is created via SFTP (a cheap metadata operation).
 func (c *Client) UploadBlob(remotePath, blobID string, r io.Reader) error {
+	if err := validateBlobID(blobID); err != nil {
+		return err
+	}
 	shardDir := filepath.Join(remotePath, blobShard(blobID))
 	if err := c.sftp.MkdirAll(shardDir); err != nil {
 		return fmt.Errorf("sftp mkdir %s: %w", shardDir, err)
 	}
 	dest := filepath.Join(shardDir, blobID)
-	f, err := c.sftp.Create(dest)
+
+	sess, err := c.sshConn.NewSession()
 	if err != nil {
-		return fmt.Errorf("sftp create %s: %w", dest, err)
+		return fmt.Errorf("ssh new session: %w", err)
 	}
-	defer f.Close()
-	if _, err := io.Copy(f, r); err != nil {
-		return fmt.Errorf("sftp write %s: %w", dest, err)
+	defer sess.Close()
+
+	stdin, err := sess.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("ssh stdin pipe: %w", err)
+	}
+
+	if err := sess.Start("cat > " + shellQuote(dest)); err != nil {
+		stdin.Close()
+		return fmt.Errorf("ssh exec: %w", err)
+	}
+
+	_, copyErr := io.Copy(stdin, r)
+	closeErr := stdin.Close()
+	waitErr := sess.Wait()
+
+	if copyErr != nil {
+		return fmt.Errorf("stream upload %s: %w", dest, copyErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close stdin: %w", closeErr)
+	}
+	if waitErr != nil {
+		return fmt.Errorf("ssh exec wait: %w", waitErr)
 	}
 	return nil
 }
@@ -112,14 +159,45 @@ func (c *Client) DeleteBlob(remotePath, blobID string) error {
 	return c.sftp.Remove(dest)
 }
 
-// DownloadBlob downloads a remote blob and returns a ReadCloser.
+// sshReadCloser wraps an SSH session's stdout so the caller can stream the
+// remote command output and close the session when done (or on error).
+type sshReadCloser struct {
+	io.Reader
+	sess *ssh.Session
+}
+
+// Close terminates the SSH session. Safe to call whether the remote command
+// has already exited or if the caller stopped reading early.
+func (r *sshReadCloser) Close() error {
+	return r.sess.Close()
+}
+
+// DownloadBlob opens a streaming SSH exec session running "cat" on the remote
+// blob file and returns the session's stdout as an io.ReadCloser. This bypasses
+// SFTP packet overhead for bulk data, matching SCP-level throughput.
 func (c *Client) DownloadBlob(remotePath, blobID string) (io.ReadCloser, error) {
-	src := filepath.Join(remotePath, blobShard(blobID), blobID)
-	f, err := c.sftp.Open(src)
-	if err != nil {
-		return nil, fmt.Errorf("sftp open %s: %w", src, err)
+	if err := validateBlobID(blobID); err != nil {
+		return nil, err
 	}
-	return f, nil
+	src := filepath.Join(remotePath, blobShard(blobID), blobID)
+
+	sess, err := c.sshConn.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("ssh new session: %w", err)
+	}
+
+	stdout, err := sess.StdoutPipe()
+	if err != nil {
+		sess.Close()
+		return nil, fmt.Errorf("ssh stdout pipe: %w", err)
+	}
+
+	if err := sess.Start("cat " + shellQuote(src)); err != nil {
+		sess.Close()
+		return nil, fmt.Errorf("ssh exec: %w", err)
+	}
+
+	return &sshReadCloser{Reader: stdout, sess: sess}, nil
 }
 
 // EnsureDir creates remote directories recursively if they don't exist.
