@@ -434,6 +434,7 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if body.WebTLSKey != "" {
 		h.cfg.WebTLSKey = body.WebTLSKey
 	}
+	// NtfyTopic is assigned unconditionally so users can clear it by saving an empty string.
 	h.cfg.NtfyTopic = body.NtfyTopic
 	if err := config.Save(h.cfg, h.cfgPath); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("save config: %v", err))

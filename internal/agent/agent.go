@@ -184,11 +184,13 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 // isExcluded reports whether path matches any of the given exclude paths.
 // A path is excluded if it equals an exclude entry or is nested under one.
 func isExcluded(path string, excludePaths []string) bool {
+	cleanPath := filepath.Clean(path)
 	for _, excl := range excludePaths {
 		if excl == "" {
 			continue
 		}
-		if path == excl || strings.HasPrefix(path, excl+string(os.PathSeparator)) {
+		cleanExcl := filepath.Clean(excl)
+		if cleanPath == cleanExcl || strings.HasPrefix(cleanPath, cleanExcl+string(os.PathSeparator)) {
 			return true
 		}
 	}

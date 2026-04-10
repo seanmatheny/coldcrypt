@@ -13,7 +13,8 @@ const ntfyBaseURL = "https://ntfy.sh"
 var httpClient = &http.Client{Timeout: 10 * time.Second}
 
 // SendFailure sends a backup failure notification to the configured ntfy.sh topic.
-// If topic is empty, it does nothing.
+// If topic is empty, it does nothing. Errors are logged but not returned because
+// notification delivery is best-effort and should not affect the backup job result.
 func SendFailure(topic string, jobID int64, errMsg string) {
 	if topic == "" {
 		return
