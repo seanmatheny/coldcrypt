@@ -13,6 +13,7 @@ A client-side encrypted backup manager with a web GUI, SFTP transfer, and automa
 - **Incremental backups** — SHA-256 content hashing skips unchanged files
 - **Cron scheduler** — define recurring backup schedules via the web UI
 - **Password-protected web UI** — dark-themed SPA for managing files, jobs, schedules, and settings
+- **Purge** — permanently delete backed-up blobs for a specific directory prefix or the entire backup, from both the CLI and the web UI
 
 ---
 
@@ -142,6 +143,12 @@ coldcrypt serve [--config path]
 coldcrypt backup [--config path] [dir1 dir2 ...]
     Run a one-off backup. Uses source_dirs from config if no dirs specified.
 
+coldcrypt purge [--config path] [--path <display-prefix>] [--yes]
+    Permanently delete backed-up blobs from the remote server and clear matching
+    database records. Without --path, ALL backups are purged. With --path, only
+    files whose display path starts with the given prefix are purged.
+    Requires typing DELETE ALL at the confirmation prompt unless --yes is given.
+
 coldcrypt db-dump --out <file> [--config path]
     Create a consistent copy of the SQLite database at the given path.
     Safe to run while the server is running (uses SQLite VACUUM INTO).
@@ -181,7 +188,7 @@ coldcrypt db-dump --config ~/.coldcrypt/config.json \
 After signing in at `http(s)://localhost:8443`:
 
 - **Dashboard** — overview stats, recent jobs, "Run Backup Now" button
-- **Files** — searchable pseudo-filesystem browser; click "Versions" on any file to see its backup history and trigger a restore
+- **Files** — searchable pseudo-filesystem browser; click "Versions" on any file to see its backup history and trigger a restore; click "Restore" on a directory to restore all its files; click "Purge" on a directory (or "Purge All" in the header) to permanently delete its backed-up blobs
 - **Jobs** — full backup job history with status badges (green=completed, yellow=running, red=failed); auto-refreshes for running jobs
 - **Schedules** — add/edit/delete cron-based schedules; examples provided for common intervals
 - **Settings** — edit remote server config, source directories, and change the web UI password

@@ -7,6 +7,7 @@ let currentSection = 'dashboard';
 let restoreFileID = null;
 let restoreVersionNum = null;
 let restoreDisplayPrefix = null;
+let purgeDisplayPrefix = null;
 let jobRefreshTimer = null;
 let serverDataDir = '';  // populated after login; used as default restore path
 
@@ -14,13 +15,14 @@ let serverDataDir = '';  // populated after login; used as default restore path
 const expandedDirs = new Set();
 
 // ── Bootstrap modal handles ────────────────────────────────────────────────
-let versionsModal, restoreModal, scheduleModal;
+let versionsModal, restoreModal, scheduleModal, purgeModal;
 
 // ── Init ───────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   versionsModal  = new bootstrap.Modal(document.getElementById('versionsModal'));
   restoreModal   = new bootstrap.Modal(document.getElementById('restoreModal'));
   scheduleModal  = new bootstrap.Modal(document.getElementById('scheduleModal'));
+  purgeModal     = new bootstrap.Modal(document.getElementById('purgeModal'));
 
   bindNav();
   bindGlobal();
@@ -144,12 +146,18 @@ function bindGlobal() {
   // Restore All button
   document.getElementById('files-restore-all-btn').addEventListener('click', () => promptRestoreDir(''));
 
+  // Purge All button
+  document.getElementById('files-purge-all-btn').addEventListener('click', () => promptPurgeDir(''));
+
   // Schedule add
   document.getElementById('schedule-add-btn').addEventListener('click', openScheduleModal);
   document.getElementById('sched-save-btn').addEventListener('click', saveSchedule);
 
   // Restore confirm
   document.getElementById('restore-confirm-btn').addEventListener('click', doRestore);
+
+  // Purge confirm
+  document.getElementById('purge-confirm-btn').addEventListener('click', doPurge);
 
   // Settings save / password change
   document.getElementById('cfg-save-btn').addEventListener('click', saveConfig);
@@ -274,6 +282,11 @@ function renderTreeNode(node, container, pathPrefix, depth) {
           title="Restore this directory"
           onclick="event.stopPropagation(); promptRestoreDir('${esc(fullPath)}')">
           <i class="fa fa-download me-1"></i>Restore
+        </button>
+        <button class="btn btn-xs btn-outline-danger ms-1"
+          title="Purge this directory"
+          onclick="event.stopPropagation(); promptPurgeDir('${esc(fullPath)}')">
+          <i class="fa fa-trash me-1"></i>Purge
         </button>
       </span>`;
 
@@ -414,6 +427,49 @@ async function doRestore() {
   } else {
     const d = await r.json().catch(() => ({ error: 'Restore failed' }));
     showMsg('restore-msg', d.error || 'Restore failed', 'danger');
+  }
+}
+
+// Prompt to purge a directory (or everything when prefix is '').
+function promptPurgeDir(displayPrefix) {
+  purgeDisplayPrefix = displayPrefix;
+  const label = displayPrefix ? `Purge directory: ${displayPrefix}` : 'Purge All Backups';
+  document.getElementById('purgeModalLabel').textContent = label;
+  const desc = displayPrefix
+    ? `All backed-up blobs under <strong>${esc(displayPrefix)}</strong> will be permanently deleted from the remote server and removed from the local database.`
+    : 'All backed-up blobs will be permanently deleted from the remote server and the local database will be cleared.';
+  document.getElementById('purge-target-desc').innerHTML = desc;
+  document.getElementById('purge-confirm-input').value = '';
+  document.getElementById('purge-msg').classList.add('d-none');
+  purgeModal.show();
+}
+
+async function doPurge() {
+  const input = document.getElementById('purge-confirm-input').value.trim();
+  if (input !== 'DELETE ALL') {
+    showMsg('purge-msg', 'You must type DELETE ALL to confirm.', 'danger');
+    return;
+  }
+
+  const btn = document.getElementById('purge-confirm-btn');
+  btn.disabled = true;
+  btn.textContent = 'Purging…';
+
+  const r = await fetch('/api/purge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ display_prefix: purgeDisplayPrefix || '' })
+  });
+
+  btn.disabled = false;
+  btn.innerHTML = '<i class="fa fa-trash me-1"></i>Purge';
+
+  if (r.ok) {
+    showMsg('purge-msg', 'Purge completed successfully.', 'success');
+    setTimeout(() => { purgeModal.hide(); loadFiles(); }, 1500);
+  } else {
+    const d = await r.json().catch(() => ({ error: 'Purge failed' }));
+    showMsg('purge-msg', d.error || 'Purge failed', 'danger');
   }
 }
 
