@@ -1,8 +1,10 @@
 package transfer
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -104,17 +106,39 @@ func (c *Client) UploadBlob(remotePath, blobID string, r io.Reader) error {
 }
 
 // DeleteBlob removes a remote blob by ID from its shard subdirectory.
+// If the blob is not found there it falls back to the flat (pre-sharding)
+// layout for backward compatibility with blobs uploaded before sharding was
+// introduced.
 func (c *Client) DeleteBlob(remotePath, blobID string) error {
 	dest := filepath.Join(remotePath, blobShard(blobID), blobID)
-	return c.sftp.Remove(dest)
+	err := c.sftp.Remove(dest)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	// Fall back to the flat layout used before shard directories were introduced.
+	return c.sftp.Remove(filepath.Join(remotePath, blobID))
 }
 
 // DownloadBlob downloads a remote blob and returns a ReadCloser.
+// If the blob is not found at the sharded path it falls back to the flat
+// (pre-sharding) layout for backward compatibility.
 func (c *Client) DownloadBlob(remotePath, blobID string) (io.ReadCloser, error) {
 	src := filepath.Join(remotePath, blobShard(blobID), blobID)
 	f, err := c.sftp.Open(src)
+	if err == nil {
+		return f, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("sftp open (sharded path) %s: %w", src, err)
+	}
+	// Fall back to the flat layout used before shard directories were introduced.
+	flatSrc := filepath.Join(remotePath, blobID)
+	f, err = c.sftp.Open(flatSrc)
 	if err != nil {
-		return nil, fmt.Errorf("sftp open %s: %w", src, err)
+		return nil, fmt.Errorf("sftp open %s: %w", flatSrc, err)
 	}
 	return f, nil
 }
