@@ -58,6 +58,8 @@ func main() {
 		cmdDBRestore(os.Args[2:])
 	case "change-password":
 		cmdChangePassword(os.Args[2:])
+	case "purge":
+		cmdPurge(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", os.Args[1])
 		printUsage()
@@ -72,6 +74,7 @@ Usage:
   coldcrypt init <data-dir>             Initialize a new data directory
   coldcrypt serve [--config path]       Start web server and scheduler
   coldcrypt backup [--config path] [dirs...]  Run a one-off backup
+  coldcrypt purge [--config path]       Permanently delete ALL backed-up blobs
   coldcrypt db-dump [--config path] --out <file>  Dump a copy of the database
   coldcrypt db-restore [--config path] --from <file>  Restore a database dump
   coldcrypt change-password [--config path]   Change the web UI password
@@ -217,6 +220,50 @@ func cmdBackup(args []string) {
 		_ = database.UpdateJob(jobID, "failed", 0, 0, err.Error())
 		os.Exit(1)
 	}
+}
+
+// ── purge ──────────────────────────────────────────────────────────────────
+
+func cmdPurge(args []string) {
+	fs := flag.NewFlagSet("purge", flag.ExitOnError)
+	cfgPath := fs.String("config", "", "path to config.json")
+	yes := fs.Bool("yes", false, "skip confirmation prompt")
+	_ = fs.Parse(args)
+
+	closeLog := setupLogging()
+	defer closeLog()
+
+	cfg, _ := loadConfig(*cfgPath)
+
+	if !*yes {
+		fmt.Println("WARNING: This will permanently delete ALL backed-up blobs from the")
+		fmt.Printf("remote server %s (path: %s) AND clear the local database.\n", cfg.RemoteHost, cfg.RemoteBasePath)
+		fmt.Println("This action CANNOT be undone.")
+		fmt.Print("\nType DELETE ALL to confirm: ")
+		line, _ := stdinReader.ReadString('\n')
+		answer := strings.TrimRight(line, "\r\n")
+		if answer != "DELETE ALL" {
+			fmt.Println("Aborted.")
+			os.Exit(0)
+		}
+	}
+
+	database, err := db.New(cfg.DataDir)
+	if err != nil {
+		log.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	a, err := agent.New(cfg, database)
+	if err != nil {
+		log.Fatalf("create agent: %v", err)
+	}
+
+	fmt.Println("Purging all backed-up blobs…")
+	if err := a.PurgeAllBackups(context.Background()); err != nil {
+		log.Fatalf("purge failed: %v", err)
+	}
+	fmt.Println("All backups have been purged.")
 }
 
 // ── db-dump ────────────────────────────────────────────────────────────────

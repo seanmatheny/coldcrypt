@@ -490,6 +490,49 @@ func (d *DB) UpdateScheduleLastRun(id int64) error {
 	return err
 }
 
+// ListAllBlobIDs returns the blob ID of every file version currently in the
+// database. This is used to enumerate blobs for remote deletion before wiping
+// the local database.
+func (d *DB) ListAllBlobIDs() ([]string, error) {
+	rows, err := d.conn.Query(`SELECT blob_id FROM file_versions`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// DeleteAllFiles removes every file and file_version record from the database
+// inside a single transaction.
+func (d *DB) DeleteAllFiles() error {
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err = tx.Exec(`DELETE FROM file_versions`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DELETE FROM files`); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 // Backup creates a consistent copy of the database at destPath using SQLite's
 // VACUUM INTO command. It is safe to call while the database is open and being
 // written to (WAL mode ensures a consistent snapshot).
