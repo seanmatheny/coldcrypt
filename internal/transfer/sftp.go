@@ -59,7 +59,6 @@ func NewClient(host string, port int, user, keyPath, password string) (*Client, 
 	sftpClient, err := sftp.NewClient(conn,
 		sftp.UseConcurrentWrites(true),
 		sftp.UseConcurrentReads(true),
-		sftp.MaxPacket(1<<20),
 	)
 	if err != nil {
 		conn.Close()
