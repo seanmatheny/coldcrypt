@@ -35,18 +35,19 @@ func EncryptFile(key []byte, src io.Reader, dst io.Writer) error {
 		return fmt.Errorf("new gcm: %w", err)
 	}
 
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+	// Allocate a single buffer: nonce + ciphertext. This avoids the separate
+	// ciphertext allocation from gcm.Seal(nil, ...), halving peak memory vs
+	// the two-allocation approach.
+	nonceSize := gcm.NonceSize()
+	out := make([]byte, nonceSize, nonceSize+len(plaintext)+gcm.Overhead())
+	if _, err := io.ReadFull(rand.Reader, out); err != nil {
 		return fmt.Errorf("nonce: %w", err)
 	}
+	out = gcm.Seal(out, out[:nonceSize], plaintext, nil)
+	plaintext = nil // release plaintext so GC can reclaim it during the upload
 
-	ciphertext := gcm.Seal(nil, nonce, plaintext, nil)
-
-	if _, err := dst.Write(nonce); err != nil {
-		return fmt.Errorf("write nonce: %w", err)
-	}
-	if _, err := dst.Write(ciphertext); err != nil {
-		return fmt.Errorf("write ciphertext: %w", err)
+	if _, err := dst.Write(out); err != nil {
+		return fmt.Errorf("write: %w", err)
 	}
 	return nil
 }
