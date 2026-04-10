@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -15,14 +14,11 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// encryptChunkSize is the plaintext size of each encryption chunk (4 MiB).
-// Peak memory per file during backup is roughly 2 × encryptChunkSize instead
-// of 2 × file_size, preventing OOM on large files.
-const encryptChunkSize = 4 * 1024 * 1024
+// encryptChunkSize is the plaintext size of each encryption chunk (32 MiB).
+// Peak memory per file during backup is roughly 2 × encryptChunkSize.
+const encryptChunkSize = 32 * 1024 * 1024
 
-// fileMagic identifies the chunked-encryption format.
-// Legacy blobs start with a random 12-byte AES-GCM nonce, so a 4-byte ASCII
-// sentinel is safe to use as a format discriminator (collision probability ≈ 1/2^32).
+// fileMagic is the 4-byte header that identifies the chunked-encryption format.
 var fileMagic = []byte("CCBK")
 
 // DeriveKey derives a 32-byte AES key from passphrase and salt using Argon2id.
@@ -99,25 +95,23 @@ func EncryptFile(key []byte, src io.Reader, dst io.Writer) error {
 	return nil
 }
 
-// DecryptFile decrypts src and writes plaintext to dst.
-// It auto-detects the chunked format (v2, magic "CCBK") and the legacy
-// single-blob format (v1) so that blobs created before the chunked format
-// was introduced remain restorable.
+// DecryptFile decrypts a chunked blob written by EncryptFile and writes
+// plaintext to dst.
 func DecryptFile(key []byte, src io.Reader, dst io.Writer) error {
-	// Peek at the first 4 bytes to detect the format.
+	// Consume and verify the magic header.
 	var header [4]byte
 	if _, err := io.ReadFull(src, header[:]); err != nil {
 		return fmt.Errorf("read header: %w", err)
 	}
-
-	if bytes.Equal(header[:], fileMagic) {
-		return decryptChunked(key, src, dst)
+	for i, b := range fileMagic {
+		if header[i] != b {
+			return fmt.Errorf("unrecognised blob format")
+		}
 	}
-	// Legacy (v1) format: the first 4 bytes are part of the random 12-byte nonce.
-	return decryptLegacy(key, header[:], src, dst)
+	return decryptChunked(key, src, dst)
 }
 
-// decryptChunked decrypts a v2 chunked blob.  src is positioned just after the
+// decryptChunked decrypts a chunked blob. src is positioned just after the
 // 4-byte magic.
 func decryptChunked(key []byte, src io.Reader, dst io.Writer) error {
 	// Read the stored plaintext chunk size for sanity-checking data lengths.
@@ -169,40 +163,6 @@ func decryptChunked(key []byte, src io.Reader, dst io.Writer) error {
 		if _, err := dst.Write(plaintext); err != nil {
 			return fmt.Errorf("write chunk plaintext: %w", err)
 		}
-	}
-	return nil
-}
-
-// decryptLegacy decrypts a v1 (pre-chunked) blob.
-// firstBytes contains the 4 bytes already consumed from src.
-// NOTE: this loads the entire ciphertext into memory; it exists only for
-// backward-compatibility with blobs encrypted before the chunked format.
-func decryptLegacy(key []byte, firstBytes []byte, src io.Reader, dst io.Writer) error {
-	rest, err := io.ReadAll(src)
-	if err != nil {
-		return fmt.Errorf("read ciphertext: %w", err)
-	}
-	data := append(firstBytes, rest...)
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return fmt.Errorf("new cipher: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return fmt.Errorf("new gcm: %w", err)
-	}
-
-	nonceSize := gcm.NonceSize()
-	if len(data) < nonceSize {
-		return fmt.Errorf("ciphertext too short")
-	}
-	plaintext, err := gcm.Open(nil, data[:nonceSize], data[nonceSize:], nil)
-	if err != nil {
-		return fmt.Errorf("decrypt: %w", err)
-	}
-	if _, err := dst.Write(plaintext); err != nil {
-		return fmt.Errorf("write plaintext: %w", err)
 	}
 	return nil
 }
