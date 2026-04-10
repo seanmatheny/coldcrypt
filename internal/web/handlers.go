@@ -450,6 +450,23 @@ func maskSecret(s string) string {
 	return "****"
 }
 
+// POST /api/purge
+func (h *handlers) handlePurge(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	var req struct {
+		DisplayPrefix string `json:"display_prefix"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.agent.PurgeByPrefix(r.Context(), req.DisplayPrefix); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // POST /api/notify/test
 func (h *handlers) handleTestNotify(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -580,4 +597,13 @@ func (h *handlers) registerRoutes(mux *http.ServeMux) {
 
 	// Notifications
 	mux.HandleFunc("/api/notify/test", h.requireAuth(h.handleTestNotify))
+
+	// Purge
+	mux.HandleFunc("/api/purge", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		h.handlePurge(w, r)
+	}))
 }

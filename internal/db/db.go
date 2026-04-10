@@ -494,7 +494,27 @@ func (d *DB) UpdateScheduleLastRun(id int64) error {
 // database. This is used to enumerate blobs for remote deletion before wiping
 // the local database.
 func (d *DB) ListAllBlobIDs() ([]string, error) {
-	rows, err := d.conn.Query(`SELECT blob_id FROM file_versions`)
+	return d.ListBlobIDsByDisplayPrefix("")
+}
+
+// ListBlobIDsByDisplayPrefix returns the blob IDs of all file versions for
+// files whose display_path starts with the given prefix. If prefix is empty,
+// all blob IDs are returned.
+func (d *DB) ListBlobIDsByDisplayPrefix(prefix string) ([]string, error) {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if prefix == "" {
+		rows, err = d.conn.Query(`SELECT blob_id FROM file_versions`)
+	} else {
+		rows, err = d.conn.Query(
+			`SELECT fv.blob_id FROM file_versions fv
+			 JOIN files f ON f.id = fv.file_id
+			 WHERE f.display_path LIKE ?`,
+			prefix+"%",
+		)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -513,6 +533,13 @@ func (d *DB) ListAllBlobIDs() ([]string, error) {
 // DeleteAllFiles removes every file and file_version record from the database
 // inside a single transaction.
 func (d *DB) DeleteAllFiles() error {
+	return d.DeleteFilesByDisplayPrefix("")
+}
+
+// DeleteFilesByDisplayPrefix removes file and file_version records whose
+// display_path starts with the given prefix inside a single transaction. If
+// prefix is empty, all records are deleted.
+func (d *DB) DeleteFilesByDisplayPrefix(prefix string) error {
 	tx, err := d.conn.Begin()
 	if err != nil {
 		return err
@@ -523,11 +550,23 @@ func (d *DB) DeleteAllFiles() error {
 		}
 	}()
 
-	if _, err = tx.Exec(`DELETE FROM file_versions`); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(`DELETE FROM files`); err != nil {
-		return err
+	if prefix == "" {
+		if _, err = tx.Exec(`DELETE FROM file_versions`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`DELETE FROM files`); err != nil {
+			return err
+		}
+	} else {
+		if _, err = tx.Exec(
+			`DELETE FROM file_versions WHERE file_id IN (SELECT id FROM files WHERE display_path LIKE ?)`,
+			prefix+"%",
+		); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`DELETE FROM files WHERE display_path LIKE ?`, prefix+"%"); err != nil {
+			return err
+		}
 	}
 
 	return tx.Commit()

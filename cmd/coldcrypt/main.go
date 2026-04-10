@@ -74,7 +74,7 @@ Usage:
   coldcrypt init <data-dir>             Initialize a new data directory
   coldcrypt serve [--config path]       Start web server and scheduler
   coldcrypt backup [--config path] [dirs...]  Run a one-off backup
-  coldcrypt purge [--config path]       Permanently delete ALL backed-up blobs
+  coldcrypt purge [--config path] [--path <display-prefix>]  Permanently delete backed-up blobs
   coldcrypt db-dump [--config path] --out <file>  Dump a copy of the database
   coldcrypt db-restore [--config path] --from <file>  Restore a database dump
   coldcrypt change-password [--config path]   Change the web UI password
@@ -228,6 +228,7 @@ func cmdPurge(args []string) {
 	fs := flag.NewFlagSet("purge", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.json")
 	yes := fs.Bool("yes", false, "skip confirmation prompt")
+	purgePath := fs.String("path", "", "purge only files under this display path prefix (omit to purge everything)")
 	_ = fs.Parse(args)
 
 	closeLog := setupLogging()
@@ -236,8 +237,13 @@ func cmdPurge(args []string) {
 	cfg, _ := loadConfig(*cfgPath)
 
 	if !*yes {
-		fmt.Println("WARNING: This will permanently delete ALL backed-up blobs from the")
-		fmt.Printf("remote server %s (path: %s) AND clear the local database.\n", cfg.RemoteHost, cfg.RemoteBasePath)
+		if *purgePath != "" {
+			fmt.Printf("WARNING: This will permanently delete all backed-up blobs under %q from the\n", *purgePath)
+			fmt.Printf("remote server %s (path: %s) AND clear matching database records.\n", cfg.RemoteHost, cfg.RemoteBasePath)
+		} else {
+			fmt.Println("WARNING: This will permanently delete ALL backed-up blobs from the")
+			fmt.Printf("remote server %s (path: %s) AND clear the local database.\n", cfg.RemoteHost, cfg.RemoteBasePath)
+		}
 		fmt.Println("This action CANNOT be undone.")
 		fmt.Print("\nType DELETE ALL to confirm: ")
 		line, _ := stdinReader.ReadString('\n')
@@ -259,11 +265,19 @@ func cmdPurge(args []string) {
 		log.Fatalf("create agent: %v", err)
 	}
 
-	fmt.Println("Purging all backed-up blobs…")
-	if err := a.PurgeAllBackups(context.Background()); err != nil {
+	if *purgePath != "" {
+		fmt.Printf("Purging backed-up blobs under %q…\n", *purgePath)
+	} else {
+		fmt.Println("Purging all backed-up blobs…")
+	}
+	if err := a.PurgeByPrefix(context.Background(), *purgePath); err != nil {
 		log.Fatalf("purge failed: %v", err)
 	}
-	fmt.Println("All backups have been purged.")
+	if *purgePath != "" {
+		fmt.Printf("Backups under %q have been purged.\n", *purgePath)
+	} else {
+		fmt.Println("All backups have been purged.")
+	}
 }
 
 // ── db-dump ────────────────────────────────────────────────────────────────
