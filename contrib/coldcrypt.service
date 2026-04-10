@@ -26,6 +26,11 @@ SyslogIdentifier=coldcrypt
 
 # Harden the service where possible.
 NoNewPrivileges=true
+# ProtectSystem=strict remounts most of the host filesystem read-only for the
+# service. Only StateDirectory=/LogsDirectory= and paths listed in
+# ReadWritePaths= remain writable. This affects restores too: restoring into
+# arbitrary locations like /Restore will fail with EROFS unless they are added
+# to ReadWritePaths= below.
 ProtectSystem=strict
 # StateDirectory and LogsDirectory create /var/lib/coldcrypt and
 # /var/log/coldcrypt (owned by the service user) and implicitly add them to
@@ -36,6 +41,9 @@ ReadOnlyPaths=/etc/coldcrypt
 # Uncomment and list the directories you are backing up so the service can
 # read them. Example:
 # ReadOnlyPaths=/home /srv/data
+# Add writable restore destinations here if you need to restore outside the
+# state/log directories. Example:
+# ReadWritePaths=/Restore /mnt/restore-target
 
 [Install]
 WantedBy=multi-user.target

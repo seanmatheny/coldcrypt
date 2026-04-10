@@ -229,7 +229,11 @@ sudo -u coldcrypt coldcrypt change-password --config /etc/coldcrypt/config.json
 sudo cp contrib/coldcrypt.service /etc/systemd/system/coldcrypt.service
 
 # If your source directories are outside /home or /srv/data, uncomment and
-# edit the ReadOnlyPaths= line in the unit file first.
+# edit the ReadOnlyPaths= line in the unit file first. If you want to restore
+# files into directories outside /var/lib/coldcrypt or /var/log/coldcrypt,
+# add them to ReadWritePaths= as well. With ProtectSystem=strict enabled,
+# directories like /Restore are read-only to the service unless explicitly
+# whitelisted.
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now coldcrypt
@@ -237,6 +241,16 @@ sudo systemctl enable --now coldcrypt
 # coldcrypt user) automatically on first start via StateDirectory= and
 # LogsDirectory= in the unit file.
 sudo systemctl status coldcrypt
+```
+
+Example unit overrides:
+
+```ini
+# Allow reading additional backup source directories.
+ReadOnlyPaths=/home /srv/data
+
+# Allow restoring into custom writable destinations.
+ReadWritePaths=/Restore /mnt/restore-target
 ```
 
 ### 5. View logs
