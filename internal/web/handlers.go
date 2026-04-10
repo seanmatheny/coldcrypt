@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -187,6 +188,11 @@ func (h *handlers) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.agent.IsRunning() {
+		writeError(w, http.StatusConflict, "a backup is already in progress")
+		return
+	}
+
 	jobID, err := h.db.CreateJob()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -199,6 +205,10 @@ func (h *handlers) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			ExcludePaths: h.cfg.ExcludePaths,
 			JobID:        jobID,
 		}); err != nil {
+			if errors.Is(err, agent.ErrAlreadyRunning) {
+				_ = h.db.UpdateJob(jobID, "skipped", 0, 0, err.Error())
+				return
+			}
 			log.Printf("backup job %d error: %v", jobID, err)
 			_ = h.db.UpdateJob(jobID, "failed", 0, 0, err.Error())
 			notify.SendFailure(h.cfg.NtfyTopic, jobID, err.Error())

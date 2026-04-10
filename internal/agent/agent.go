@@ -1,21 +1,26 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/seanmatheny/coldcrypt/internal/config"
 	"github.com/seanmatheny/coldcrypt/internal/db"
 	"github.com/seanmatheny/coldcrypt/internal/transfer"
 )
+
+// ErrAlreadyRunning is returned by Run when a backup job is already in progress.
+var ErrAlreadyRunning = errors.New("a backup job is already in progress")
 
 // BackupOptions configures a single backup run.
 type BackupOptions struct {
@@ -26,9 +31,10 @@ type BackupOptions struct {
 
 // Agent performs backup and restore operations.
 type Agent struct {
-	cfg *config.Config
-	db  *db.DB
-	key []byte
+	cfg     *config.Config
+	db      *db.DB
+	key     []byte
+	running int32 // atomic: 1 while a backup job is running
 }
 
 // New creates a new Agent, deriving the encryption key from the configured passphrase.
@@ -51,8 +57,18 @@ func New(cfg *config.Config, database *db.DB) (*Agent, error) {
 	return &Agent{cfg: cfg, db: database, key: key}, nil
 }
 
+// IsRunning reports whether a backup job is currently in progress.
+func (a *Agent) IsRunning() bool {
+	return atomic.LoadInt32(&a.running) == 1
+}
+
 // Run performs a full incremental backup.
 func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
+	if !atomic.CompareAndSwapInt32(&a.running, 0, 1) {
+		return ErrAlreadyRunning
+	}
+	defer atomic.StoreInt32(&a.running, 0)
+
 	client, err := transfer.NewClient(
 		a.cfg.RemoteHost,
 		a.cfg.RemotePort,
@@ -127,18 +143,35 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 			}
 			fileSize := fi.Size()
 
-			var encBuf bytes.Buffer
-			if err := EncryptFile(a.key, f, &encBuf); err != nil {
-				log.Printf("encrypt error %s: %v", path, err)
-				return nil
-			}
-
 			// Generate blob ID (UUID).
 			blobID := uuid.New().String()
 
-			// Upload to remote.
-			if err := client.UploadBlob(a.cfg.RemoteBasePath, blobID, &encBuf); err != nil {
-				log.Printf("upload error %s: %v", path, err)
+			// Encrypt and upload via a pipe so the plaintext allocation can be
+			// reclaimed by the GC while the upload is in progress, instead of
+			// buffering a third full copy in a bytes.Buffer.
+			pr, pw := io.Pipe()
+			encErrCh := make(chan error, 1)
+			go func() {
+				err := EncryptFile(a.key, f, pw)
+				pw.CloseWithError(err)
+				encErrCh <- err
+			}()
+
+			uploadErr := client.UploadBlob(a.cfg.RemoteBasePath, blobID, pr)
+			if uploadErr != nil {
+				// Unblock the encrypt goroutine if it is blocked writing to the pipe.
+				_ = pr.CloseWithError(uploadErr)
+			} else {
+				_ = pr.Close()
+			}
+			encErr := <-encErrCh
+
+			if uploadErr != nil {
+				log.Printf("upload error %s: %v", path, uploadErr)
+				return nil
+			}
+			if encErr != nil {
+				log.Printf("encrypt error %s: %v", path, encErr)
 				return nil
 			}
 

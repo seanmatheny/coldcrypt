@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -104,6 +105,11 @@ func (s *Scheduler) loadSchedules() error {
 
 // runSchedule executes a backup for the given schedule.
 func (s *Scheduler) runSchedule(scheduleID int64, name string, sourceDirs []string) {
+	if s.agent.IsRunning() {
+		log.Printf("scheduler: skipping scheduled backup '%s': a backup is already in progress", name)
+		return
+	}
+
 	log.Printf("scheduler: starting scheduled backup '%s'", name)
 
 	jobID, err := s.db.CreateJob()
@@ -120,6 +126,11 @@ func (s *Scheduler) runSchedule(scheduleID int64, name string, sourceDirs []stri
 		ExcludePaths: s.cfg.ExcludePaths,
 		JobID:        jobID,
 	}); err != nil {
+		if errors.Is(err, agent.ErrAlreadyRunning) {
+			log.Printf("scheduler: skipping scheduled backup '%s': %v", name, err)
+			_ = s.db.UpdateJob(jobID, "skipped", 0, 0, err.Error())
+			return
+		}
 		log.Printf("scheduler: backup '%s' failed: %v", name, err)
 		_ = s.db.UpdateJob(jobID, "failed", 0, 0, err.Error())
 		notify.SendFailure(s.cfg.NtfyTopic, jobID, err.Error())
