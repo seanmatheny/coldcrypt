@@ -158,7 +158,7 @@ func cmdServe(args []string) {
 		log.Fatalf("create agent: %v", err)
 	}
 
-	sched := scheduler.New(database, a)
+	sched := scheduler.New(database, a, cfg)
 	if err := sched.Start(); err != nil {
 		log.Fatalf("start scheduler: %v", err)
 	}
@@ -209,8 +209,9 @@ func cmdBackup(args []string) {
 
 	log.Printf("Starting backup job %d", jobID)
 	if err := a.Run(context.Background(), agent.BackupOptions{
-		SourceDirs: dirs,
-		JobID:      jobID,
+		SourceDirs:   dirs,
+		ExcludePaths: cfg.ExcludePaths,
+		JobID:        jobID,
 	}); err != nil {
 		log.Printf("backup failed: %v", err)
 		_ = database.UpdateJob(jobID, "failed", 0, 0, err.Error())

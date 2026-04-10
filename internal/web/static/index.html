@@ -486,6 +486,11 @@
                 <textarea id="cfg-source-dirs" class="form-control form-control-sm" rows="3"
                   placeholder="One directory per line"></textarea>
               </div>
+              <h6 class="mb-2 text-muted mt-3">Exclude Paths</h6>
+              <div class="mb-2">
+                <textarea id="cfg-exclude-paths" class="form-control form-control-sm" rows="3"
+                  placeholder="One path per line (e.g. /home/user/Downloads)"></textarea>
+              </div>
               <button class="btn btn-primary btn-sm mt-2" id="cfg-save-btn">
                 <i class="fa fa-save me-1"></i>Save Config
               </button>
@@ -505,6 +510,19 @@
               <div id="pwd-msg" class="small mb-2 d-none"></div>
               <button class="btn btn-warning btn-sm" id="cfg-pwd-btn">
                 <i class="fa fa-key me-1"></i>Change Password
+              </button>
+            </div>
+            <div class="stat-card mt-3">
+              <h6 class="mb-3 text-muted">Notifications (ntfy.sh)</h6>
+              <div class="mb-2">
+                <label class="form-label small">ntfy.sh Topic</label>
+                <input type="text" id="cfg-ntfy-topic" class="form-control form-control-sm"
+                  placeholder="my-backup-alerts" />
+                <div class="form-text text-muted small">Push notifications are sent to ntfy.sh/{topic} when a backup job fails.</div>
+              </div>
+              <div id="ntfy-msg" class="small mb-2 d-none"></div>
+              <button class="btn btn-secondary btn-sm" id="cfg-ntfy-test-btn">
+                <i class="fa fa-bell me-1"></i>Send Test Notification
               </button>
             </div>
           </div>

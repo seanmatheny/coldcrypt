@@ -8,21 +8,25 @@ import (
 
 	cronv3 "github.com/robfig/cron/v3"
 	"github.com/seanmatheny/coldcrypt/internal/agent"
+	"github.com/seanmatheny/coldcrypt/internal/config"
 	"github.com/seanmatheny/coldcrypt/internal/db"
+	"github.com/seanmatheny/coldcrypt/internal/notify"
 )
 
 // Scheduler manages cron-based backup schedules.
 type Scheduler struct {
-	mu      sync.Mutex
-	cron    *cronv3.Cron
-	db      *db.DB
-	agent   *agent.Agent
+	mu       sync.Mutex
+	cron     *cronv3.Cron
+	cfg      *config.Config
+	db       *db.DB
+	agent    *agent.Agent
 	entryIDs map[int64]cronv3.EntryID
 }
 
 // New creates a new Scheduler.
-func New(database *db.DB, a *agent.Agent) *Scheduler {
+func New(database *db.DB, a *agent.Agent, cfg *config.Config) *Scheduler {
 	return &Scheduler{
+		cfg:      cfg,
 		db:       database,
 		agent:    a,
 		entryIDs: make(map[int64]cronv3.EntryID),
@@ -112,10 +116,12 @@ func (s *Scheduler) runSchedule(scheduleID int64, name string, sourceDirs []stri
 
 	ctx := context.Background()
 	if err := s.agent.Run(ctx, agent.BackupOptions{
-		SourceDirs: sourceDirs,
-		JobID:      jobID,
+		SourceDirs:   sourceDirs,
+		ExcludePaths: s.cfg.ExcludePaths,
+		JobID:        jobID,
 	}); err != nil {
 		log.Printf("scheduler: backup '%s' failed: %v", name, err)
 		_ = s.db.UpdateJob(jobID, "failed", 0, 0, err.Error())
+		notify.SendFailure(s.cfg.NtfyTopic, jobID, err.Error())
 	}
 }

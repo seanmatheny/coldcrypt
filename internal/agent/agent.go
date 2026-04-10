@@ -19,8 +19,9 @@ import (
 
 // BackupOptions configures a single backup run.
 type BackupOptions struct {
-	SourceDirs []string
-	JobID      int64
+	SourceDirs   []string
+	ExcludePaths []string
+	JobID        int64
 }
 
 // Agent performs backup and restore operations.
@@ -82,6 +83,12 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 				return nil
 			}
 			if d.IsDir() {
+				if isExcluded(path, opts.ExcludePaths) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if isExcluded(path, opts.ExcludePaths) {
 				return nil
 			}
 			if err := ctx.Err(); err != nil {
@@ -172,4 +179,20 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 	_ = a.db.UpdateJob(opts.JobID, "completed", filesProcessed, bytesTransferred, "")
 	log.Printf("backup job %d completed: %d files, %d bytes", opts.JobID, filesProcessed, bytesTransferred)
 	return nil
+}
+
+// isExcluded reports whether path matches any of the given exclude paths.
+// A path is excluded if it equals an exclude entry or is nested under one.
+func isExcluded(path string, excludePaths []string) bool {
+	cleanPath := filepath.Clean(path)
+	for _, excl := range excludePaths {
+		if excl == "" {
+			continue
+		}
+		cleanExcl := filepath.Clean(excl)
+		if cleanPath == cleanExcl || strings.HasPrefix(cleanPath, cleanExcl+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
 }

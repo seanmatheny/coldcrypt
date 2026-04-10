@@ -154,6 +154,7 @@ function bindGlobal() {
   // Settings save / password change
   document.getElementById('cfg-save-btn').addEventListener('click', saveConfig);
   document.getElementById('cfg-pwd-btn').addEventListener('click', changePassword);
+  document.getElementById('cfg-ntfy-test-btn').addEventListener('click', testNotification);
 }
 
 // ── Dashboard ──────────────────────────────────────────────────────────────
@@ -595,6 +596,8 @@ async function loadSettings() {
   document.getElementById('cfg-key-path').value    = cfg.remote_key_path || '';
   document.getElementById('cfg-remote-path').value = cfg.remote_base_path || '';
   document.getElementById('cfg-source-dirs').value = (cfg.source_dirs || []).join('\n');
+  document.getElementById('cfg-exclude-paths').value = (cfg.exclude_paths || []).join('\n');
+  document.getElementById('cfg-ntfy-topic').value  = cfg.ntfy_topic || '';
 }
 
 async function saveConfig() {
@@ -604,7 +607,9 @@ async function saveConfig() {
     remote_user:      document.getElementById('cfg-remote-user').value.trim(),
     remote_key_path:  document.getElementById('cfg-key-path').value.trim(),
     remote_base_path: document.getElementById('cfg-remote-path').value.trim(),
-    source_dirs:      document.getElementById('cfg-source-dirs').value.split('\n').map(s => s.trim()).filter(Boolean)
+    source_dirs:      document.getElementById('cfg-source-dirs').value.split('\n').map(s => s.trim()).filter(Boolean),
+    exclude_paths:    document.getElementById('cfg-exclude-paths').value.split('\n').map(s => s.trim()).filter(Boolean),
+    ntfy_topic:       document.getElementById('cfg-ntfy-topic').value.trim()
   };
   const r = await fetch('/api/config', {
     method: 'PUT',
@@ -636,6 +641,16 @@ async function changePassword() {
   } else {
     const d = await r.json().catch(() => ({ error: 'Change failed' }));
     showMsg('pwd-msg', d.error || 'Change failed', 'danger');
+  }
+}
+
+async function testNotification() {
+  const r = await fetch('/api/notify/test', { method: 'POST' });
+  if (r.ok) {
+    showMsg('ntfy-msg', 'Test notification sent successfully.', 'success');
+  } else {
+    const d = await r.json().catch(() => ({ error: 'Send failed' }));
+    showMsg('ntfy-msg', d.error || 'Send failed', 'danger');
   }
 }
 
