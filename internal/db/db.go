@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS file_versions (
     blob_id TEXT NOT NULL,
     size INTEGER NOT NULL,
     hash TEXT NOT NULL,
+    mtime_ns INTEGER NOT NULL DEFAULT 0,
     encrypted_at DATETIME NOT NULL,
     job_id INTEGER NOT NULL,
     UNIQUE(file_id, version_num)
@@ -118,12 +119,50 @@ func New(dataDir string) (*DB, error) {
 	if _, err := conn.Exec(schema); err != nil {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
+	// Add mtime_ns column to existing databases that pre-date this column.
+	// Use PRAGMA table_info rather than catching ALTER TABLE errors so the
+	// migration is robust across SQLite driver versions.
+	if err := addColumnIfMissing(conn, "file_versions", "mtime_ns",
+		`ALTER TABLE file_versions ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return nil, err
+	}
 	return &DB{conn: conn}, nil
 }
 
 // Close closes the database connection.
 func (d *DB) Close() error {
 	return d.conn.Close()
+}
+
+// addColumnIfMissing adds the given column to a table only when it is not
+// already present. It uses PRAGMA table_info to check for the column, which is
+// more reliable than catching driver-specific error message strings.
+func addColumnIfMissing(conn *sql.DB, table, column, alterSQL string) error {
+	rows, err := conn.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return fmt.Errorf("table_info %s: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scan table_info %s: %w", table, err)
+		}
+		if name == column {
+			return nil // column already exists
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("table_info rows %s: %w", table, err)
+	}
+	if _, err := conn.Exec(alterSQL); err != nil {
+		return fmt.Errorf("add column %s.%s: %w", table, column, err)
+	}
+	return nil
 }
 
 // CreateJob creates a new backup job and returns its ID.
@@ -206,7 +245,7 @@ func scanJobs(rows *sql.Rows) ([]Job, error) {
 
 // UpsertFileVersion inserts or rotates versions (max 3).
 // Returns the blob ID that was evicted (if any) so the caller can delete it from remote.
-func (d *DB) UpsertFileVersion(sourcePath, displayPath, blobID, hash string, size int64, jobID int64) (oldBlobID string, err error) {
+func (d *DB) UpsertFileVersion(sourcePath, displayPath, blobID, hash string, size, mtimeNS, jobID int64) (oldBlobID string, err error) {
 	tx, err := d.conn.Begin()
 	if err != nil {
 		return "", err
@@ -252,8 +291,8 @@ func (d *DB) UpsertFileVersion(sourcePath, displayPath, blobID, hash string, siz
 			nextVer = int(maxVer.Int64) + 1
 		}
 		_, err = tx.Exec(
-			`INSERT INTO file_versions (file_id, version_num, blob_id, size, hash, encrypted_at, job_id) VALUES (?,?,?,?,?,?,?)`,
-			fileID, nextVer, blobID, size, hash, now, jobID,
+			`INSERT INTO file_versions (file_id, version_num, blob_id, size, hash, mtime_ns, encrypted_at, job_id) VALUES (?,?,?,?,?,?,?,?)`,
+			fileID, nextVer, blobID, size, hash, mtimeNS, now, jobID,
 		)
 		if err != nil {
 			return "", err
@@ -284,8 +323,8 @@ func (d *DB) UpsertFileVersion(sourcePath, displayPath, blobID, hash string, siz
 			return "", err
 		}
 		_, err = tx.Exec(
-			`INSERT INTO file_versions (file_id, version_num, blob_id, size, hash, encrypted_at, job_id) VALUES (?,?,?,?,?,?,?)`,
-			fileID, nextVer, blobID, size, hash, now, jobID,
+			`INSERT INTO file_versions (file_id, version_num, blob_id, size, hash, mtime_ns, encrypted_at, job_id) VALUES (?,?,?,?,?,?,?,?)`,
+			fileID, nextVer, blobID, size, hash, mtimeNS, now, jobID,
 		)
 		if err != nil {
 			return "", err
@@ -296,20 +335,38 @@ func (d *DB) UpsertFileVersion(sourcePath, displayPath, blobID, hash string, siz
 	return oldBlobID, err
 }
 
-// GetLatestVersionHash returns the hash of the most recent version for a source path, or "" if not found.
-func (d *DB) GetLatestVersionHash(sourcePath string) (string, error) {
-	var hash string
-	err := d.conn.QueryRow(
-		`SELECT fv.hash FROM file_versions fv
+// GetLatestVersionInfo returns the hash, size, and mtime (nanoseconds) of the
+// most recent version for a source path, or zero values if not found.
+func (d *DB) GetLatestVersionInfo(sourcePath string) (hash string, size int64, mtimeNS int64, err error) {
+	err = d.conn.QueryRow(
+		`SELECT fv.hash, fv.size, fv.mtime_ns FROM file_versions fv
 		 JOIN files f ON f.id = fv.file_id
 		 WHERE f.source_path=?
 		 ORDER BY fv.encrypted_at DESC LIMIT 1`,
 		sourcePath,
-	).Scan(&hash)
+	).Scan(&hash, &size, &mtimeNS)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		return "", 0, 0, nil
 	}
-	return hash, err
+	return hash, size, mtimeNS, err
+}
+
+// UpdateLatestVersionMtime updates the mtime_ns stored for the most recent
+// version of a file. This is called when a file's content is confirmed
+// unchanged (hash matches) but its mtime/size metadata has drifted, so future
+// backup runs can skip the SHA-256 read via the stat pre-check.
+func (d *DB) UpdateLatestVersionMtime(sourcePath string, mtimeNS int64) error {
+	_, err := d.conn.Exec(
+		`UPDATE file_versions SET mtime_ns=?
+		 WHERE id = (
+		     SELECT fv.id FROM file_versions fv
+		     JOIN files f ON f.id = fv.file_id
+		     WHERE f.source_path=?
+		     ORDER BY fv.encrypted_at DESC LIMIT 1
+		 )`,
+		mtimeNS, sourcePath,
+	)
+	return err
 }
 
 // ListFiles lists all backed-up files with optional search filter.
