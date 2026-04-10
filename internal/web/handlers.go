@@ -15,6 +15,7 @@ import (
 	"github.com/seanmatheny/coldcrypt/internal/agent"
 	"github.com/seanmatheny/coldcrypt/internal/config"
 	"github.com/seanmatheny/coldcrypt/internal/db"
+	"github.com/seanmatheny/coldcrypt/internal/notify"
 	"github.com/seanmatheny/coldcrypt/internal/scheduler"
 )
 
@@ -194,11 +195,13 @@ func (h *handlers) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		if err := h.agent.Run(context.Background(), agent.BackupOptions{
-			SourceDirs: dirs,
-			JobID:      jobID,
+			SourceDirs:   dirs,
+			ExcludePaths: h.cfg.ExcludePaths,
+			JobID:        jobID,
 		}); err != nil {
 			log.Printf("backup job %d error: %v", jobID, err)
 			_ = h.db.UpdateJob(jobID, "failed", 0, 0, err.Error())
+			notify.SendFailure(h.cfg.NtfyTopic, jobID, err.Error())
 		}
 	}()
 
@@ -367,10 +370,12 @@ func (h *handlers) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"remote_password":  maskSecret(h.cfg.RemotePassword),
 		"remote_base_path": h.cfg.RemoteBasePath,
 		"source_dirs":      h.cfg.SourceDirs,
+		"exclude_paths":    h.cfg.ExcludePaths,
 		"web_port":         h.cfg.WebPort,
 		"data_dir":         h.cfg.DataDir,
 		"web_tls_cert":     h.cfg.WebTLSCert,
 		"web_tls_key":      h.cfg.WebTLSKey,
+		"ntfy_topic":       h.cfg.NtfyTopic,
 	}
 	writeJSON(w, http.StatusOK, sanitized)
 }
@@ -386,9 +391,11 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		RemotePassword string   `json:"remote_password"`
 		RemoteBasePath string   `json:"remote_base_path"`
 		SourceDirs     []string `json:"source_dirs"`
+		ExcludePaths   []string `json:"exclude_paths"`
 		WebPort        int      `json:"web_port"`
 		WebTLSCert     string   `json:"web_tls_cert"`
 		WebTLSKey      string   `json:"web_tls_key"`
+		NtfyTopic      string   `json:"ntfy_topic"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -415,6 +422,9 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if body.SourceDirs != nil {
 		h.cfg.SourceDirs = body.SourceDirs
 	}
+	if body.ExcludePaths != nil {
+		h.cfg.ExcludePaths = body.ExcludePaths
+	}
 	if body.WebPort != 0 {
 		h.cfg.WebPort = body.WebPort
 	}
@@ -424,6 +434,7 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if body.WebTLSKey != "" {
 		h.cfg.WebTLSKey = body.WebTLSKey
 	}
+	h.cfg.NtfyTopic = body.NtfyTopic
 	if err := config.Save(h.cfg, h.cfgPath); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("save config: %v", err))
 		return
@@ -436,6 +447,19 @@ func maskSecret(s string) string {
 		return ""
 	}
 	return "****"
+}
+
+// POST /api/notify/test
+func (h *handlers) handleTestNotify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := notify.SendTest(h.cfg.NtfyTopic); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // parseIDFromPath extracts an integer ID from a path segment like "/api/files/42/versions".
@@ -552,4 +576,7 @@ func (h *handlers) registerRoutes(mux *http.ServeMux) {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
 	}))
+
+	// Notifications
+	mux.HandleFunc("/api/notify/test", h.requireAuth(h.handleTestNotify))
 }

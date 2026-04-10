@@ -15,6 +15,7 @@ type Config struct {
 	RemotePassword  string   `json:"remote_password,omitempty"`
 	RemoteBasePath  string   `json:"remote_base_path"`
 	SourceDirs      []string `json:"source_dirs"`
+	ExcludePaths    []string `json:"exclude_paths,omitempty"`
 	PassphraseFile  string   `json:"passphrase_file,omitempty"`
 	Passphrase      string   `json:"passphrase,omitempty"`
 	WebPort         int      `json:"web_port"`
@@ -23,6 +24,7 @@ type Config struct {
 	WebTLSKey       string   `json:"web_tls_key,omitempty"`
 	DataDir         string   `json:"data_dir"`
 	KeySalt         string   `json:"key_salt"` // base64-encoded Argon2id salt
+	NtfyTopic       string   `json:"ntfy_topic,omitempty"`
 }
 
 func Load(path string) (*Config, error) {
