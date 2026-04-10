@@ -56,7 +56,7 @@ func NewClient(host string, port int, user, keyPath, password string) (*Client, 
 		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
 
-	sftpClient, err := sftp.NewClient(conn)
+	sftpClient, err := sftp.NewClient(conn, sftp.UseConcurrentWrites(true))
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("sftp new client: %w", err)
