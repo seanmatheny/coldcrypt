@@ -79,7 +79,8 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 	}
 	defer atomic.StoreInt32(&a.running, 0)
 
-	client, err := transfer.NewClient(
+	// Use a short-lived connection for the one-time EnsureDir metadata op.
+	metaClient, err := transfer.NewClient(
 		a.cfg.RemoteHost,
 		a.cfg.RemotePort,
 		a.cfg.RemoteUser,
@@ -87,13 +88,13 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 		a.cfg.RemotePassword,
 	)
 	if err != nil {
-		return fmt.Errorf("sftp connect: %w", err)
+		return fmt.Errorf("ssh connect: %w", err)
 	}
-	defer client.Close()
-
-	if err := client.EnsureDir(a.cfg.RemoteBasePath); err != nil {
+	if err := metaClient.EnsureDir(a.cfg.RemoteBasePath); err != nil {
+		metaClient.Close()
 		return fmt.Errorf("ensure remote dir: %w", err)
 	}
+	metaClient.Close()
 
 	var (
 		mu               sync.Mutex
@@ -106,10 +107,26 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 	var wg sync.WaitGroup
 	for i := 0; i < uploadWorkers; i++ {
 		wg.Add(1)
-		go func() {
+		go func(workerID int) {
 			defer wg.Done()
+			// Each worker opens its own SSH connection so all four can
+			// saturate their full share of the available bandwidth
+			// simultaneously (one shared connection would serialize on
+			// the single TCP congestion window).
+			workerClient, err := transfer.NewClient(
+				a.cfg.RemoteHost,
+				a.cfg.RemotePort,
+				a.cfg.RemoteUser,
+				a.cfg.RemoteKeyPath,
+				a.cfg.RemotePassword,
+			)
+			if err != nil {
+				log.Printf("worker %d: connect error: %v", workerID, err)
+				return
+			}
+			defer workerClient.Close()
 			for item := range workCh {
-				n, b := a.processFile(ctx, client, opts, item.path, item.srcDir)
+				n, b := a.processFile(ctx, workerClient, opts, item.path, item.srcDir)
 				if n > 0 {
 					mu.Lock()
 					filesProcessed += n
@@ -117,7 +134,7 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 					mu.Unlock()
 				}
 			}
-		}()
+		}(i)
 	}
 
 	for _, srcDir := range opts.SourceDirs {
