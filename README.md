@@ -169,15 +169,20 @@ The `db-dump` command creates a clean, consistent snapshot using SQLite's
 
 **Manual dump:**
 ```bash
-coldcrypt db-dump --config ~/.coldcrypt/config.json \
-                  --out /backup/coldcrypt-$(date +%Y%m%d).db
+coldcrypt db-dump --config /etc/coldcrypt/config.json \
+                  --out ~/coldcrypt-$(date +%Y%m%d).db
 ```
 
 **Daily crontab entry** (runs at 03:00, keeps 30 days of dumps):
+```bash
+sudo mkdir -p /var/lib/coldcrypt
+sudo chown -R coldcrypt:coldcrypt /var/lib/coldcrypt
+```
+
 ```cron
 0 3 * * * /usr/local/bin/coldcrypt db-dump \
               --config /etc/coldcrypt/config.json \
-              --out /backup/coldcrypt-$(date +\%Y\%m\%d).db && \
+              --out /var/lib/coldcrypt-$(date +%Y%m%d).db && \
           find /backup -name 'coldcrypt-*.db' -mtime +30 -delete
 ```
 
