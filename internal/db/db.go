@@ -369,8 +369,17 @@ func (d *DB) UpdateLatestVersionMtime(sourcePath string, mtimeNS int64) error {
 	return err
 }
 
-// ListFiles lists all backed-up files with optional search filter.
-func (d *DB) ListFiles(search string) ([]FileEntry, error) {
+// CountFiles returns the total number of distinct backed-up files.
+func (d *DB) CountFiles() (int64, error) {
+	var count int64
+	err := d.conn.QueryRow(`SELECT COUNT(*) FROM files`).Scan(&count)
+	return count, err
+}
+
+// ListFiles lists backed-up files with an optional search filter.
+// When limit > 0, at most limit+1 rows are fetched so the caller can detect
+// truncation (len(result) > limit) without a separate COUNT query.
+func (d *DB) ListFiles(search string, limit int) ([]FileEntry, error) {
 	query := `SELECT id, source_path, display_path FROM files`
 	args := []interface{}{}
 	if search != "" {
@@ -378,6 +387,10 @@ func (d *DB) ListFiles(search string) ([]FileEntry, error) {
 		args = append(args, "%"+search+"%")
 	}
 	query += ` ORDER BY display_path`
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit+1)
+	}
 	rows, err := d.conn.Query(query, args...)
 	if err != nil {
 		return nil, err

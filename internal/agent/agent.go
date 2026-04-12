@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/seanmatheny/coldcrypt/internal/config"
 	"github.com/seanmatheny/coldcrypt/internal/db"
+	"github.com/seanmatheny/coldcrypt/internal/notify"
 	"github.com/seanmatheny/coldcrypt/internal/transfer"
 )
 
@@ -100,6 +101,7 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 		mu               sync.Mutex
 		filesProcessed   int
 		bytesTransferred int64
+		errCount         int // files that could not be backed up
 	)
 
 	workCh := make(chan fileWork, 64)
@@ -126,16 +128,21 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 			}
 			defer workerClient.Close()
 			for item := range workCh {
-				n, b := a.processFile(ctx, workerClient, opts, item.path, item.srcDir)
+				n, b, hadErr := a.processFile(ctx, workerClient, opts, item.path, item.srcDir)
+				mu.Lock()
 				if n > 0 {
-					mu.Lock()
 					filesProcessed += n
 					bytesTransferred += b
-					mu.Unlock()
 				}
+				if hadErr {
+					errCount++
+				}
+				mu.Unlock()
 			}
 		}(i)
 	}
+
+	var walkErrCount int // walk-level errors (inaccessible directories/files)
 
 	for _, srcDir := range opts.SourceDirs {
 		if ctx.Err() != nil {
@@ -145,6 +152,9 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 		walkErr := filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				log.Printf("walk error at %s: %v", path, err)
+				mu.Lock()
+				walkErrCount++
+				mu.Unlock()
 				return nil
 			}
 			if d.IsDir() {
@@ -173,17 +183,28 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 	wg.Wait()
 
 	// Update job stats.
-	_ = a.db.UpdateJob(opts.JobID, "completed", filesProcessed, bytesTransferred, "")
-	log.Printf("backup job %d completed: %d files, %d bytes", opts.JobID, filesProcessed, bytesTransferred)
+	totalErrors := errCount + walkErrCount
+	status := "completed"
+	errMsg := ""
+	if totalErrors > 0 {
+		status = "completed_with_errors"
+		errMsg = fmt.Sprintf("%d file(s) could not be backed up", totalErrors)
+	}
+	_ = a.db.UpdateJob(opts.JobID, status, filesProcessed, bytesTransferred, errMsg)
+	log.Printf("backup job %d %s: %d files, %d bytes, %d errors", opts.JobID, status, filesProcessed, bytesTransferred, totalErrors)
+	if totalErrors > 0 {
+		notify.SendPartialFailure(a.cfg.NtfyTopic, opts.JobID, totalErrors)
+	}
 	return nil
 }
 
 // processFile checks whether a file needs backing up, and if so encrypts and
-// uploads it. It returns (1, fileSize) when the file was backed up, otherwise
-// (0, 0).
-func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts BackupOptions, path, srcDir string) (int, int64) {
+// uploads it. It returns (1, fileSize, false) when the file was backed up,
+// (0, 0, false) when it was skipped (unchanged), and (0, 0, true) when an
+// error prevented the file from being backed up.
+func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts BackupOptions, path, srcDir string) (int, int64, bool) {
 	if ctx.Err() != nil {
-		return 0, 0
+		return 0, 0, false
 	}
 
 	// Fast stat-based pre-check: skip the SHA-256 read if size and mtime are
@@ -191,7 +212,7 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 	info, err := os.Stat(path)
 	if err != nil {
 		log.Printf("stat error %s: %v", path, err)
-		return 0, 0
+		return 0, 0, true
 	}
 	currSize := info.Size()
 	currMtimeNS := info.ModTime().UnixNano()
@@ -199,7 +220,7 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 	storedHash, storedSize, storedMtimeNS, err := a.db.GetLatestVersionInfo(path)
 	if err != nil {
 		log.Printf("db info check error %s: %v", path, err)
-		return 0, 0
+		return 0, 0, true
 	}
 	if storedHash != "" && currSize == storedSize && currMtimeNS == storedMtimeNS {
 		// Stat (size + mtime) is identical to the last backed-up version.
@@ -207,14 +228,14 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 		// matching size+mtime almost always means unchanged content. Files
 		// where the mtime is deliberately reset after modification (e.g. via
 		// touch -t) will be missed until the next hash-verification run.
-		return 0, 0
+		return 0, 0, false
 	}
 
 	// Stat changed (or no prior version); verify content with SHA-256.
 	hash, err := HashFile(path)
 	if err != nil {
 		log.Printf("hash error %s: %v", path, err)
-		return 0, 0
+		return 0, 0, true
 	}
 	if storedHash == hash {
 		// Content unchanged despite stat difference (e.g. mtime was reset).
@@ -222,14 +243,14 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 		if err := a.db.UpdateLatestVersionMtime(path, currMtimeNS); err != nil {
 			log.Printf("update mtime error %s: %v", path, err)
 		}
-		return 0, 0
+		return 0, 0, false
 	}
 
 	// Content changed; encrypt and upload.
 	f, err := os.Open(path)
 	if err != nil {
 		log.Printf("open error %s: %v", path, err)
-		return 0, 0
+		return 0, 0, true
 	}
 	defer f.Close()
 
@@ -253,11 +274,11 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 
 	if uploadErr != nil {
 		log.Printf("upload error %s: %v", path, uploadErr)
-		return 0, 0
+		return 0, 0, true
 	}
 	if encErr != nil {
 		log.Printf("encrypt error %s: %v", path, encErr)
-		return 0, 0
+		return 0, 0, true
 	}
 
 	// Build display path relative to source dir.
@@ -271,7 +292,7 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 	oldBlobID, err := a.db.UpsertFileVersion(path, displayPath, blobID, hash, currSize, currMtimeNS, opts.JobID)
 	if err != nil {
 		log.Printf("db upsert error %s: %v", path, err)
-		return 0, 0
+		return 0, 0, true
 	}
 
 	// Delete evicted blob from remote if any.
@@ -282,7 +303,7 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 	}
 
 	log.Printf("backed up: %s -> %s", path, blobID)
-	return 1, currSize
+	return 1, currSize, false
 }
 
 // isExcluded reports whether path matches any of the given exclude paths.

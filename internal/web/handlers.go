@@ -218,18 +218,48 @@ func (h *handlers) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]int64{"job_id": jobID})
 }
 
+// filesPageLimit is the maximum number of files returned by GET /api/files
+// when no search query is provided. Using limit+1 internally lets us detect
+// truncation without a separate COUNT query.
+const filesPageLimit = 2000
+
 // GET /api/files
 func (h *handlers) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	search := r.URL.Query().Get("search")
-	files, err := h.db.ListFiles(search)
+	// Apply a page limit for full listings to prevent returning millions of
+	// records at once (which would stall the browser). Searches are already
+	// filtered so no limit is applied there.
+	limit := 0
+	if search == "" {
+		limit = filesPageLimit
+	}
+	files, err := h.db.ListFiles(search, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	hasMore := false
+	if limit > 0 && len(files) > limit {
+		files = files[:limit]
+		hasMore = true
+	}
 	if files == nil {
 		files = []db.FileEntry{}
 	}
-	writeJSON(w, http.StatusOK, files)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"files":    files,
+		"has_more": hasMore,
+	})
+}
+
+// GET /api/stats
+func (h *handlers) handleStats(w http.ResponseWriter, r *http.Request) {
+	count, err := h.db.CountFiles()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"total_files": count})
 }
 
 // GET /api/files/:id/versions
@@ -607,6 +637,15 @@ func (h *handlers) registerRoutes(mux *http.ServeMux) {
 
 	// Notifications
 	mux.HandleFunc("/api/notify/test", h.requireAuth(h.handleTestNotify))
+
+	// Stats
+	mux.HandleFunc("/api/stats", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		h.handleStats(w, r)
+	}))
 
 	// Purge
 	mux.HandleFunc("/api/purge", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
