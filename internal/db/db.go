@@ -119,6 +119,12 @@ func New(dataDir string) (*DB, error) {
 	if _, err := conn.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		return nil, fmt.Errorf("wal mode: %w", err)
 	}
+	// Keep all temp tables and sort files in memory so that index creation
+	// during schema migration works in hardened systemd environments where
+	// the temp directory may not be accessible (ProtectSystem=strict).
+	if _, err := conn.Exec("PRAGMA temp_store = 2"); err != nil {
+		return nil, fmt.Errorf("temp_store: %w", err)
+	}
 	if _, err := conn.Exec(schema); err != nil {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
