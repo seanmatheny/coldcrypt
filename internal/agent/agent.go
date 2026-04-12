@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/seanmatheny/coldcrypt/internal/config"
@@ -40,6 +41,56 @@ type Agent struct {
 	db      *db.DB
 	key     []byte
 	running int32 // atomic: 1 while a backup job is running
+
+	// mu guards cancelFn, currentFile, jobID, and jobStart.
+	mu          sync.RWMutex
+	cancelFn    context.CancelFunc
+	currentFile string
+	jobID       int64
+	jobStart    time.Time
+
+	// Atomic live counters, reset at job start.
+	filesProc int64
+	bytesXfer int64
+}
+
+// AgentStatus holds a snapshot of the agent's current state for the live UI.
+type AgentStatus struct {
+	Running          bool
+	JobID            int64
+	CurrentFile      string
+	FilesProcessed   int64
+	BytesTransferred int64
+	StartedAt        time.Time
+}
+
+// GetStatus returns a consistent snapshot of the agent's current state.
+func (a *Agent) GetStatus() AgentStatus {
+	a.mu.RLock()
+	cf := a.currentFile
+	jid := a.jobID
+	jstart := a.jobStart
+	a.mu.RUnlock()
+	return AgentStatus{
+		Running:          atomic.LoadInt32(&a.running) == 1,
+		JobID:            jid,
+		CurrentFile:      cf,
+		FilesProcessed:   atomic.LoadInt64(&a.filesProc),
+		BytesTransferred: atomic.LoadInt64(&a.bytesXfer),
+		StartedAt:        jstart,
+	}
+}
+
+// Stop cancels the currently running backup job. Returns true if a job was running.
+func (a *Agent) Stop() bool {
+	a.mu.RLock()
+	fn := a.cancelFn
+	a.mu.RUnlock()
+	if fn != nil {
+		fn()
+		return true
+	}
+	return false
 }
 
 // New creates a new Agent, deriving the encryption key from the configured passphrase.
@@ -78,7 +129,25 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 	if !atomic.CompareAndSwapInt32(&a.running, 0, 1) {
 		return ErrAlreadyRunning
 	}
-	defer atomic.StoreInt32(&a.running, 0)
+
+	ctx, cancel := context.WithCancel(ctx)
+	a.mu.Lock()
+	a.cancelFn = cancel
+	a.jobID = opts.JobID
+	a.jobStart = time.Now()
+	a.currentFile = ""
+	a.mu.Unlock()
+	atomic.StoreInt64(&a.filesProc, 0)
+	atomic.StoreInt64(&a.bytesXfer, 0)
+
+	defer func() {
+		atomic.StoreInt32(&a.running, 0)
+		a.mu.Lock()
+		a.cancelFn = nil
+		a.currentFile = ""
+		a.mu.Unlock()
+		cancel()
+	}()
 
 	// Use a short-lived connection for the one-time EnsureDir metadata op.
 	metaClient, err := transfer.NewClient(
@@ -128,6 +197,9 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 			}
 			defer workerClient.Close()
 			for item := range workCh {
+				a.mu.Lock()
+				a.currentFile = item.path
+				a.mu.Unlock()
 				n, b, hadErr := a.processFile(ctx, workerClient, opts, item.path, item.srcDir)
 				mu.Lock()
 				if n > 0 {
@@ -138,6 +210,10 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 					errCount++
 				}
 				mu.Unlock()
+				if n > 0 {
+					atomic.AddInt64(&a.filesProc, int64(n))
+					atomic.AddInt64(&a.bytesXfer, b)
+				}
 			}
 		}(i)
 	}
@@ -186,13 +262,17 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 	totalErrors := errCount + walkErrCount
 	status := "completed"
 	errMsg := ""
-	if totalErrors > 0 {
+	if ctx.Err() != nil {
+		// Job was stopped by the user.
+		status = "stopped"
+		errMsg = "job was stopped by user"
+	} else if totalErrors > 0 {
 		status = "completed_with_errors"
 		errMsg = fmt.Sprintf("%d file(s) could not be backed up", totalErrors)
 	}
 	_ = a.db.UpdateJob(opts.JobID, status, filesProcessed, bytesTransferred, errMsg)
 	log.Printf("backup job %d %s: %d files, %d bytes, %d errors", opts.JobID, status, filesProcessed, bytesTransferred, totalErrors)
-	if totalErrors > 0 {
+	if totalErrors > 0 && ctx.Err() == nil {
 		notify.SendPartialFailure(a.cfg.NtfyTopic, opts.JobID, totalErrors)
 	}
 	return nil

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -64,6 +65,8 @@ CREATE TABLE IF NOT EXISTS files (
     source_path TEXT NOT NULL UNIQUE,
     display_path TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_files_display_path ON files(display_path);
 
 CREATE TABLE IF NOT EXISTS file_versions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -642,7 +645,83 @@ func (d *DB) DeleteFilesByDisplayPrefix(prefix string) error {
 	return tx.Commit()
 }
 
-// Backup creates a consistent copy of the database at destPath using SQLite's
+// DirChild represents an immediate child (file or sub-directory) at a given display-path prefix.
+type DirChild struct {
+	// Name is the directory segment name (for dirs) or basename (for files).
+	Name     string
+	IsDir    bool
+	FileID   int64  // only set when IsDir is false
+	FullPath string // complete display_path; only set when IsDir is false
+}
+
+// ListDirectChildren returns the immediate children (files and sub-directory names) beneath
+// the given display-path prefix. Use an empty string for root-level children.
+// A non-empty prefix must end with "/".
+// Results are sorted: directories first (alphabetically), then files (alphabetically).
+func (d *DB) ListDirectChildren(prefix string) ([]DirChild, error) {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if prefix == "" {
+		rows, err = d.conn.Query(`SELECT id, display_path FROM files ORDER BY display_path`)
+	} else {
+		rows, err = d.conn.Query(
+			`SELECT id, display_path FROM files WHERE display_path LIKE ? ORDER BY display_path`,
+			prefix+"%",
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	seenDirs := make(map[string]struct{})
+	var children []DirChild
+	for rows.Next() {
+		var id int64
+		var dp string
+		if err := rows.Scan(&id, &dp); err != nil {
+			return nil, err
+		}
+		rest := dp[len(prefix):]
+		if rest == "" {
+			continue
+		}
+		if slashIdx := strings.Index(rest, "/"); slashIdx >= 0 {
+			dirName := rest[:slashIdx]
+			if dirName != "" {
+				if _, seen := seenDirs[dirName]; !seen {
+					seenDirs[dirName] = struct{}{}
+					children = append(children, DirChild{Name: dirName, IsDir: true})
+				}
+			}
+		} else {
+			children = append(children, DirChild{Name: rest, IsDir: false, FileID: id, FullPath: dp})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	sort.Slice(children, func(i, j int) bool {
+		if children[i].IsDir != children[j].IsDir {
+			return children[i].IsDir // directories before files
+		}
+		return children[i].Name < children[j].Name
+	})
+	return children, nil
+}
+
+// CountDirectChildren returns the number of immediate children beneath the given prefix.
+// This is used to show whether a directory node is expandable in the UI.
+func (d *DB) CountDirectChildren(prefix string) (int64, error) {
+	children, err := d.ListDirectChildren(prefix)
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(children)), nil
+}
 // VACUUM INTO command. It is safe to call while the database is open and being
 // written to (WAL mode ensures a consistent snapshot).
 func (d *DB) Backup(destPath string) error {
