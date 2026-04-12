@@ -23,6 +23,16 @@ func SendFailure(topic string, jobID int64, errMsg string) {
 	send(topic, "Coldcrypt Backup Failed", msg, "rotating_light")
 }
 
+// SendPartialFailure sends a warning notification when a backup job completes
+// but some files could not be backed up. If topic is empty, it does nothing.
+func SendPartialFailure(topic string, jobID int64, errCount int) {
+	if topic == "" {
+		return
+	}
+	msg := fmt.Sprintf("Backup job %d completed with errors: %d file(s) could not be backed up. Check the log for details.", jobID, errCount)
+	send(topic, "Coldcrypt Backup Warning", msg, "warning")
+}
+
 // SendTest sends a test notification to the configured ntfy.sh topic.
 // Returns an error if the request fails or the topic is empty.
 func SendTest(topic string) error {

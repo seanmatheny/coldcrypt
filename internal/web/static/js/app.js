@@ -167,13 +167,14 @@ function bindGlobal() {
 
 // ── Dashboard ──────────────────────────────────────────────────────────────
 async function loadDashboard() {
-  const [files, jobs, schedules] = await Promise.all([
-    apiFetch('/api/files'),
+  const [stats, jobs, schedules] = await Promise.all([
+    apiFetch('/api/stats'),
     apiFetch('/api/jobs'),
     apiFetch('/api/schedules')
   ]);
 
-  document.getElementById('dash-total-files').textContent = (files || []).length;
+  document.getElementById('dash-total-files').textContent =
+    (stats && stats.total_files != null) ? stats.total_files : 0;
 
   const completedJobs = (jobs || []).filter(j => j.Status === 'completed');
   if (completedJobs.length > 0) {
@@ -195,10 +196,22 @@ async function loadDashboard() {
 // ── Files – tree view ──────────────────────────────────────────────────────
 async function loadFiles(search = '') {
   const url = search ? `/api/files?search=${encodeURIComponent(search)}` : '/api/files';
-  const files = await apiFetch(url) || [];
+  const resp = await apiFetch(url) || { files: [], has_more: false };
+  const files = resp.files || [];
+  const hasMore = resp.has_more || false;
 
   const treeEl = document.getElementById('files-tree');
   const flatEl = document.getElementById('files-flat');
+  const noteEl = document.getElementById('files-limit-note');
+
+  if (noteEl) {
+    if (!search && hasMore) {
+      noteEl.textContent = `Showing first 2\u202f000 files. Use the search box to find specific files.`;
+      noteEl.classList.remove('d-none');
+    } else {
+      noteEl.classList.add('d-none');
+    }
+  }
 
   if (search) {
     treeEl.classList.add('d-none');
@@ -267,6 +280,9 @@ function renderTreeNode(node, container, pathPrefix, depth) {
   const dirEntries = [...node.dirs.entries()].sort(([a], [b]) => a.localeCompare(b));
   for (const [name, subtree] of dirEntries) {
     const fullPath = pathPrefix + name + '/';
+    // Auto-expand the top-level (depth 0) directories so the tree is not
+    // blank when users first open the Files tab.
+    if (depth === 0) expandedDirs.add(fullPath);
     const isExpanded = expandedDirs.has(fullPath);
 
     const rowEl = document.createElement('div');
@@ -510,7 +526,12 @@ function jobRowFull(job) {
 }
 
 function statusBadge(status) {
-  const cls = { running: 'badge-running', completed: 'badge-completed', failed: 'badge-failed' }[status] || 'bg-secondary';
+  const cls = {
+    running: 'badge-running',
+    completed: 'badge-completed',
+    failed: 'badge-failed',
+    completed_with_errors: 'badge-warning'
+  }[status] || 'bg-secondary';
   return `<span class="badge ${cls}">${status}</span>`;
 }
 
