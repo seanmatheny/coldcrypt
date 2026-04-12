@@ -175,6 +175,7 @@
     .badge-completed { background: #238636; color: #fff; }
     .badge-failed   { background: #da3633; color: #fff; }
     .badge-warning  { background: #9e6a03; color: #fff; }
+    .badge-stopped  { background: #6e7681; color: #fff; }
 
     /* File browser */
     .file-row { cursor: pointer; }
@@ -278,6 +279,24 @@
       opacity: 0.55;
       user-select: none;
     }
+
+    /* Rate graph canvas */
+    #rate-graph {
+      border: 1px solid #21262d;
+      border-radius: 4px;
+      background: #0d1117;
+      display: block;
+      width: 100%;
+      height: 64px;
+    }
+
+    /* Active job current-file text */
+    .active-file-text {
+      font-size: 0.75rem;
+      word-break: break-all;
+      color: #8b949e;
+      font-family: monospace;
+    }
   </style>
 </head>
 <body>
@@ -375,6 +394,28 @@
           </button>
         </div>
 
+        <!-- Active backup indicator (visible while a job is running) -->
+        <div id="dash-active-job" class="stat-card mb-4 d-none">
+          <div class="d-flex align-items-center justify-content-between mb-2">
+            <div class="d-flex align-items-center gap-2">
+              <span class="badge badge-running">RUNNING</span>
+              <span class="text-muted small" id="dash-active-job-id"></span>
+            </div>
+            <button class="btn btn-sm btn-danger" id="dash-stop-btn">
+              <i class="fa fa-stop me-1"></i>Stop Backup
+            </button>
+          </div>
+          <div class="small mb-1">
+            <span class="text-muted">Current file: </span>
+            <span id="dash-active-file" class="active-file-text"></span>
+          </div>
+          <div class="d-flex gap-3 small">
+            <span><span class="text-muted">Files:</span> <span id="dash-active-files">0</span></span>
+            <span><span class="text-muted">Transferred:</span> <span id="dash-active-bytes">0 B</span></span>
+            <span><span class="text-muted">Rate:</span> <span id="dash-active-rate">—</span></span>
+          </div>
+        </div>
+
         <div id="dash-recent-jobs">
           <h6 class="text-muted mb-2">Recent Jobs</h6>
           <div class="table-dark-custom">
@@ -434,6 +475,30 @@
             <i class="fa fa-play me-1"></i>Run Now
           </button>
         </div>
+
+        <!-- Active job panel (visible while a backup is running) -->
+        <div id="active-job-panel" class="stat-card mb-3 d-none">
+          <div class="d-flex align-items-start justify-content-between mb-2">
+            <div>
+              <span class="badge badge-running me-2">RUNNING</span>
+              <span class="text-muted small" id="active-job-id"></span>
+            </div>
+            <button class="btn btn-sm btn-danger" id="stop-job-btn">
+              <i class="fa fa-stop me-1"></i>Stop Backup
+            </button>
+          </div>
+          <div class="small mb-2" style="min-height:1.2em;">
+            <span class="text-muted">Current file: </span>
+            <span id="active-job-file" class="active-file-text"></span>
+          </div>
+          <div class="d-flex gap-4 small mb-2">
+            <span><span class="text-muted">Files processed:</span> <span id="active-job-files">0</span></span>
+            <span><span class="text-muted">Transferred:</span> <span id="active-job-bytes">0 B</span></span>
+            <span><span class="text-muted">Rate:</span> <span id="active-job-rate">—</span></span>
+          </div>
+          <canvas id="rate-graph"></canvas>
+        </div>
+
         <div class="table-dark-custom">
           <table class="table table-dark mb-0">
             <thead>

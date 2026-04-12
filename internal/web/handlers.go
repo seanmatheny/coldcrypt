@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -520,6 +521,82 @@ func (h *handlers) handleTestNotify(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// GET /api/files/children?prefix=<display-path-prefix>
+// Returns immediate child directories and files at the given prefix level.
+// An empty prefix returns root-level children. A non-empty prefix must end with "/".
+func (h *handlers) handleListDirChildren(w http.ResponseWriter, r *http.Request) {
+	prefix := r.URL.Query().Get("prefix")
+	if prefix != "" && !strings.HasSuffix(prefix, "/") {
+		writeError(w, http.StatusBadRequest, "prefix must end with /")
+		return
+	}
+	children, err := h.db.ListDirectChildren(prefix)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	type dirItem struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+	}
+	type fileItem struct {
+		ID          int64  `json:"id"`
+		DisplayPath string `json:"display_path"`
+		Basename    string `json:"basename"`
+	}
+
+	dirs := make([]dirItem, 0)
+	files := make([]fileItem, 0)
+	for _, c := range children {
+		if c.IsDir {
+			dirs = append(dirs, dirItem{Name: c.Name, Path: prefix + c.Name + "/"})
+		} else {
+			files = append(files, fileItem{ID: c.FileID, DisplayPath: c.FullPath, Basename: c.Name})
+		}
+	}
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name < dirs[j].Name })
+	sort.Slice(files, func(i, j int) bool { return files[i].Basename < files[j].Basename })
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"dirs":  dirs,
+		"files": files,
+	})
+}
+
+// GET /api/jobs/active — returns the live status of the currently running backup job (if any).
+func (h *handlers) handleGetActiveJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	status := h.agent.GetStatus()
+	resp := map[string]interface{}{
+		"running":           status.Running,
+		"job_id":            status.JobID,
+		"current_file":      status.CurrentFile,
+		"files_processed":   status.FilesProcessed,
+		"bytes_transferred": status.BytesTransferred,
+	}
+	if !status.StartedAt.IsZero() {
+		resp["started_at"] = status.StartedAt.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// POST /api/jobs/active/stop — cancels the currently running backup job.
+func (h *handlers) handleStopJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !h.agent.Stop() {
+		writeError(w, http.StatusConflict, "no backup job is currently running")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopping"})
+}
+
 // parseIDFromPath extracts an integer ID from a path segment like "/api/files/42/versions".
 func parseIDFromPath(path, prefix, suffix string) (int64, bool) {
 	// prefix: "/api/files/", suffix: "/versions"
@@ -539,6 +616,8 @@ func (h *handlers) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/change-password", h.requireAuth(h.handleChangePassword))
 
 	// Jobs
+	mux.HandleFunc("/api/jobs/active/stop", h.requireAuth(h.handleStopJob))
+	mux.HandleFunc("/api/jobs/active", h.requireAuth(h.handleGetActiveJob))
 	mux.HandleFunc("/api/jobs", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -559,6 +638,13 @@ func (h *handlers) registerRoutes(mux *http.ServeMux) {
 	}))
 
 	// Files
+	mux.HandleFunc("/api/files/children", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		h.handleListDirChildren(w, r)
+	}))
 	mux.HandleFunc("/api/files", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")

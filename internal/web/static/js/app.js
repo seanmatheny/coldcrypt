@@ -9,7 +9,12 @@ let restoreVersionNum = null;
 let restoreDisplayPrefix = null;
 let purgeDisplayPrefix = null;
 let jobRefreshTimer = null;
+let activeJobTimer = null;
 let serverDataDir = '';  // populated after login; used as default restore path
+
+// Rate-graph state
+let rateSamples = [];       // [{t: number, bytes: number}]
+let lastActiveJobId = null;
 
 // Tracks which directory paths are expanded in the tree view.
 const expandedDirs = new Set();
@@ -104,10 +109,11 @@ function navigateTo(section) {
   document.getElementById('topbar-section-name').textContent = names[section] || section;
 
   stopJobRefresh();
+  stopActiveJobPolling();
   switch (section) {
-    case 'dashboard': loadDashboard(); break;
+    case 'dashboard': loadDashboard(); startActiveJobPolling(); break;
     case 'files':     loadFiles(); break;
-    case 'jobs':      loadJobs(); startJobRefresh(); break;
+    case 'jobs':      loadJobs(); startJobRefresh(); startActiveJobPolling(); break;
     case 'schedules': loadSchedules(); break;
     case 'settings':  loadSettings(); break;
   }
@@ -130,6 +136,10 @@ function bindGlobal() {
 
   // Jobs section run now
   document.getElementById('jobs-run-now').addEventListener('click', () => runBackupNow());
+
+  // Stop backup buttons
+  document.getElementById('stop-job-btn').addEventListener('click', stopJob);
+  document.getElementById('dash-stop-btn').addEventListener('click', stopJob);
 
   // File search
   document.getElementById('file-search-btn').addEventListener('click', () => {
@@ -193,35 +203,37 @@ async function loadDashboard() {
   });
 }
 
-// ── Files – tree view ──────────────────────────────────────────────────────
+// ── Files – lazy tree view ─────────────────────────────────────────────────
 async function loadFiles(search = '') {
-  const url = search ? `/api/files?search=${encodeURIComponent(search)}` : '/api/files';
-  const resp = await apiFetch(url) || { files: [], has_more: false };
-  const files = resp.files || [];
-  const hasMore = resp.has_more || false;
-
   const treeEl = document.getElementById('files-tree');
   const flatEl = document.getElementById('files-flat');
   const noteEl = document.getElementById('files-limit-note');
 
-  if (noteEl) {
-    if (!search && hasMore) {
-    noteEl.textContent = `Showing first ${files.length.toLocaleString()} files. Use the search box to find specific files.`;
-      noteEl.classList.remove('d-none');
-    } else {
-      noteEl.classList.add('d-none');
-    }
-  }
+  if (noteEl) noteEl.classList.add('d-none');
 
   if (search) {
+    // Flat search mode – use the existing search endpoint.
     treeEl.classList.add('d-none');
     flatEl.classList.remove('d-none');
-    renderFlatList(files);
-  } else {
-    flatEl.classList.add('d-none');
-    treeEl.classList.remove('d-none');
-    renderFileTree(files, treeEl);
+    const url = `/api/files?search=${encodeURIComponent(search)}`;
+    const resp = await apiFetch(url) || { files: [] };
+    renderFlatList(resp.files || []);
+    return;
   }
+
+  // Tree mode: load root-level children and expand lazily.
+  flatEl.classList.add('d-none');
+  treeEl.classList.remove('d-none');
+  treeEl.innerHTML = '<div class="text-muted small p-2"><i class="fa fa-spinner fa-spin me-1"></i>Loading…</div>';
+
+  const resp = await apiFetch('/api/files/children?prefix=');
+  if (!resp || ((resp.dirs || []).length === 0 && (resp.files || []).length === 0)) {
+    treeEl.innerHTML = '<div class="text-muted text-center py-4">No files backed up yet.</div>';
+    return;
+  }
+
+  treeEl.innerHTML = '';
+  renderLazyLevel(resp.dirs || [], resp.files || [], treeEl, '', 0);
 }
 
 function renderFlatList(files) {
@@ -245,44 +257,15 @@ function renderFlatList(files) {
   });
 }
 
-// Build a nested tree structure from a flat list of file entries.
-function buildFileTree(files) {
-  const root = { dirs: new Map(), files: [] };
-  for (const f of files) {
-    const parts = f.DisplayPath.split('/');
-    let node = root;
-    for (let i = 0; i < parts.length - 1; i++) {
-      const part = parts[i];
-      if (!node.dirs.has(part)) {
-        node.dirs.set(part, { dirs: new Map(), files: [] });
-      }
-      node = node.dirs.get(part);
-    }
-    node.files.push({ ...f, _basename: parts[parts.length - 1] });
-  }
-  return root;
-}
-
-function renderFileTree(files, container) {
-  container.innerHTML = '';
-  if (files.length === 0) {
-    container.innerHTML = '<div class="text-muted text-center py-4">No files backed up yet.</div>';
-    return;
-  }
-  const tree = buildFileTree(files);
-  renderTreeNode(tree, container, '', 0);
-}
-
-function renderTreeNode(node, container, pathPrefix, depth) {
+// renderLazyLevel renders one level of the file tree.
+// dirs/files come from GET /api/files/children.
+// pathPrefix is the display-path prefix for this level; depth controls indentation.
+function renderLazyLevel(dirs, files, container, pathPrefix, depth) {
   const indent = depth * 20 + 8;
 
-  // Directories first, sorted alphabetically.
-  const dirEntries = [...node.dirs.entries()].sort(([a], [b]) => a.localeCompare(b));
-  for (const [name, subtree] of dirEntries) {
-    const fullPath = pathPrefix + name + '/';
-    // Auto-expand the top-level (depth 0) directories so the tree is not
-    // blank when users first open the Files tab.
-    if (depth === 0) expandedDirs.add(fullPath);
+  dirs.forEach(dir => {
+    const fullPath = dir.path; // already ends with "/"
+    const dirName = dir.name;
     const isExpanded = expandedDirs.has(fullPath);
 
     const rowEl = document.createElement('div');
@@ -292,7 +275,7 @@ function renderTreeNode(node, container, pathPrefix, depth) {
     rowEl.innerHTML = `
       <span class="tree-toggle" aria-hidden="true">${isExpanded ? '▾' : '▸'}</span>
       <i class="fa ${isExpanded ? 'fa-folder-open' : 'fa-folder'} text-warning me-1 tree-folder-icon" aria-hidden="true"></i>
-      <span class="tree-name">${esc(name)}</span>
+      <span class="tree-name">${esc(dirName)}</span>
       <span class="tree-actions">
         <button class="btn btn-xs btn-outline-success ms-2"
           title="Restore this directory"
@@ -309,7 +292,18 @@ function renderTreeNode(node, container, pathPrefix, depth) {
     const childrenEl = document.createElement('div');
     childrenEl.className = isExpanded ? '' : 'd-none';
 
-    rowEl.addEventListener('click', () => {
+    async function loadChildren() {
+      if (childrenEl.dataset.loaded) return;
+      childrenEl.innerHTML = `<div class="text-muted small" style="padding-left:${indent + 20}px"><i class="fa fa-spinner fa-spin me-1"></i>Loading…</div>`;
+      const r = await apiFetch('/api/files/children?prefix=' + encodeURIComponent(fullPath));
+      childrenEl.innerHTML = '';
+      if (r) {
+        renderLazyLevel(r.dirs || [], r.files || [], childrenEl, fullPath, depth + 1);
+      }
+      childrenEl.dataset.loaded = '1';
+    }
+
+    rowEl.addEventListener('click', async () => {
       if (expandedDirs.has(fullPath)) {
         expandedDirs.delete(fullPath);
         rowEl.setAttribute('aria-expanded', 'false');
@@ -322,32 +316,34 @@ function renderTreeNode(node, container, pathPrefix, depth) {
         rowEl.querySelector('.tree-toggle').textContent = '▾';
         rowEl.querySelector('.tree-folder-icon').className = 'fa fa-folder-open text-warning me-1 tree-folder-icon';
         childrenEl.classList.remove('d-none');
+        await loadChildren();
       }
     });
 
     container.appendChild(rowEl);
     container.appendChild(childrenEl);
-    renderTreeNode(subtree, childrenEl, fullPath, depth + 1);
-  }
 
-  // Files, sorted alphabetically.
-  const fileEntries = [...node.files].sort((a, b) => a._basename.localeCompare(b._basename));
-  for (const f of fileEntries) {
+    // If this directory was expanded in a previous visit, reload its children now.
+    if (isExpanded) loadChildren();
+  });
+
+  // Files at this level.
+  files.forEach(f => {
     const rowEl = document.createElement('div');
     rowEl.className = 'tree-row tree-file';
     rowEl.style.paddingLeft = indent + 'px';
     rowEl.innerHTML = `
       <span class="tree-toggle invisible" aria-hidden="true">▸</span>
       <i class="fa fa-file text-muted me-1"></i>
-      <span class="tree-name">${esc(f._basename)}</span>
+      <span class="tree-name">${esc(f.basename)}</span>
       <span class="tree-actions">
         <button class="btn btn-xs btn-outline-info ms-2"
-          onclick="event.stopPropagation(); showVersions(${f.ID}, '${esc(f.DisplayPath)}')">
+          onclick="event.stopPropagation(); showVersions(${f.id}, '${esc(f.display_path)}')">
           <i class="fa fa-clock-rotate-left me-1"></i>Versions
         </button>
       </span>`;
     container.appendChild(rowEl);
-  }
+  });
 }
 
 async function showVersions(fileID, displayPath) {
@@ -530,6 +526,7 @@ function statusBadge(status) {
     running: 'badge-running',
     completed: 'badge-completed',
     failed: 'badge-failed',
+    stopped: 'badge-stopped',
     completed_with_errors: 'badge-warning'
   }[status] || 'bg-secondary';
   return `<span class="badge ${cls}">${status}</span>`;
@@ -541,6 +538,164 @@ function startJobRefresh() {
 
 function stopJobRefresh() {
   if (jobRefreshTimer) { clearInterval(jobRefreshTimer); jobRefreshTimer = null; }
+}
+
+// ── Active job polling ─────────────────────────────────────────────────────
+function startActiveJobPolling() {
+  pollActiveJob(); // immediate first hit
+  activeJobTimer = setInterval(pollActiveJob, 2000);
+}
+
+function stopActiveJobPolling() {
+  if (activeJobTimer) { clearInterval(activeJobTimer); activeJobTimer = null; }
+}
+
+async function pollActiveJob() {
+  const status = await apiFetch('/api/jobs/active');
+  if (!status) return;
+  updateActiveJobUI(status);
+}
+
+function updateActiveJobUI(status) {
+  const isRunning = status.running;
+
+  // Accumulate rate samples.
+  if (isRunning) {
+    if (status.job_id !== lastActiveJobId) {
+      rateSamples = [];
+      lastActiveJobId = status.job_id;
+    }
+    rateSamples.push({ t: Date.now(), bytes: status.bytes_transferred || 0 });
+    if (rateSamples.length > 120) rateSamples.shift();
+  }
+
+  // Compute current transfer rate from the last two samples.
+  let rateStr = '—';
+  if (rateSamples.length >= 2) {
+    const last = rateSamples[rateSamples.length - 1];
+    const prev = rateSamples[rateSamples.length - 2];
+    const dt = (last.t - prev.t) / 1000;
+    if (dt > 0) {
+      const rateVal = Math.max(0, (last.bytes - prev.bytes) / dt);
+      rateStr = fmtSize(rateVal) + '/s';
+    }
+  }
+
+  // Update the Jobs section active-job panel.
+  const panel = document.getElementById('active-job-panel');
+  if (panel) {
+    if (isRunning) {
+      panel.classList.remove('d-none');
+      const jobIdEl = document.getElementById('active-job-id');
+      if (jobIdEl) jobIdEl.textContent = `Job #${status.job_id}`;
+      const fileEl = document.getElementById('active-job-file');
+      if (fileEl) fileEl.textContent = status.current_file || '—';
+      const filesEl = document.getElementById('active-job-files');
+      if (filesEl) filesEl.textContent = (status.files_processed || 0).toLocaleString();
+      const bytesEl = document.getElementById('active-job-bytes');
+      if (bytesEl) bytesEl.textContent = fmtSize(status.bytes_transferred || 0);
+      const rateEl = document.getElementById('active-job-rate');
+      if (rateEl) rateEl.textContent = rateStr;
+      const canvas = document.getElementById('rate-graph');
+      if (canvas) drawRateGraph(canvas, rateSamples);
+    } else {
+      panel.classList.add('d-none');
+    }
+  }
+
+  // Update the Dashboard active-job indicator.
+  const dashPanel = document.getElementById('dash-active-job');
+  if (dashPanel) {
+    if (isRunning) {
+      dashPanel.classList.remove('d-none');
+      const el = document.getElementById('dash-active-job-id');
+      if (el) el.textContent = `Job #${status.job_id}`;
+      const fileEl = document.getElementById('dash-active-file');
+      if (fileEl) fileEl.textContent = status.current_file || '—';
+      const filesEl = document.getElementById('dash-active-files');
+      if (filesEl) filesEl.textContent = (status.files_processed || 0).toLocaleString();
+      const bytesEl = document.getElementById('dash-active-bytes');
+      if (bytesEl) bytesEl.textContent = fmtSize(status.bytes_transferred || 0);
+      const rateEl = document.getElementById('dash-active-rate');
+      if (rateEl) rateEl.textContent = rateStr;
+    } else {
+      dashPanel.classList.add('d-none');
+    }
+  }
+}
+
+async function stopJob() {
+  const r = await fetch('/api/jobs/active/stop', { method: 'POST' });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({ error: 'Stop failed' }));
+    alert('Error: ' + (d.error || 'Stop failed'));
+    return;
+  }
+  // Poll immediately so the UI updates quickly.
+  setTimeout(pollActiveJob, 500);
+}
+
+function drawRateGraph(canvas, samples) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth;
+  const cssH = canvas.clientHeight;
+  if (cssW === 0 || cssH === 0) return;
+
+  const W = Math.round(cssW * dpr);
+  const H = Math.round(cssH * dpr);
+  if (canvas.width !== W || canvas.height !== H) {
+    canvas.width = W;
+    canvas.height = H;
+  }
+
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+
+  if (samples.length < 2) return;
+
+  // Compute per-sample rates (bytes/sec).
+  const rates = [];
+  for (let i = 1; i < samples.length; i++) {
+    const dt = (samples[i].t - samples[i - 1].t) / 1000;
+    const db = samples[i].bytes - samples[i - 1].bytes;
+    if (dt > 0) rates.push(Math.max(0, db / dt));
+  }
+  if (rates.length < 1) return;
+
+  const maxRate = Math.max(...rates, 1);
+  const pad = 4 * dpr;
+  const plotW = W - pad * 2;
+  const plotH = H - pad * 2;
+  const n = rates.length;
+  const xOf = i => pad + (n > 1 ? i / (n - 1) : 0) * plotW;
+  const yOf = r => pad + plotH - (r / maxRate) * plotH;
+
+  // Filled area under the curve.
+  ctx.fillStyle = 'rgba(88,166,255,0.12)';
+  ctx.beginPath();
+  ctx.moveTo(xOf(0), H - pad);
+  rates.forEach((r, i) => ctx.lineTo(xOf(i), yOf(r)));
+  ctx.lineTo(xOf(n - 1), H - pad);
+  ctx.closePath();
+  ctx.fill();
+
+  // Line.
+  ctx.strokeStyle = '#58a6ff';
+  ctx.lineWidth = 2 * dpr;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  rates.forEach((r, i) => {
+    if (i === 0) ctx.moveTo(xOf(i), yOf(r));
+    else ctx.lineTo(xOf(i), yOf(r));
+  });
+  ctx.stroke();
+
+  // Current rate label in top-right corner.
+  const currentRate = rates[n - 1];
+  ctx.fillStyle = '#58a6ff';
+  ctx.font = `${Math.round(11 * dpr)}px monospace`;
+  ctx.textAlign = 'right';
+  ctx.fillText(fmtSize(currentRate) + '/s', W - pad, pad + Math.round(12 * dpr));
 }
 
 async function runBackupNow() {
