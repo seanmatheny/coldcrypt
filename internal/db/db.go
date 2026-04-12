@@ -722,6 +722,8 @@ func (d *DB) CountDirectChildren(prefix string) (int64, error) {
 	}
 	return int64(len(children)), nil
 }
+
+// Backup creates a consistent copy of the database at destPath using SQLite's
 // VACUUM INTO command. It is safe to call while the database is open and being
 // written to (WAL mode ensures a consistent snapshot).
 func (d *DB) Backup(destPath string) error {

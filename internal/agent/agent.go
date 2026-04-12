@@ -262,7 +262,7 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 	totalErrors := errCount + walkErrCount
 	status := "completed"
 	errMsg := ""
-	if ctx.Err() != nil {
+	if errors.Is(ctx.Err(), context.Canceled) {
 		// Job was stopped by the user.
 		status = "stopped"
 		errMsg = "job was stopped by user"
@@ -272,7 +272,7 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 	}
 	_ = a.db.UpdateJob(opts.JobID, status, filesProcessed, bytesTransferred, errMsg)
 	log.Printf("backup job %d %s: %d files, %d bytes, %d errors", opts.JobID, status, filesProcessed, bytesTransferred, totalErrors)
-	if totalErrors > 0 && ctx.Err() == nil {
+	if totalErrors > 0 && !errors.Is(ctx.Err(), context.Canceled) {
 		notify.SendPartialFailure(a.cfg.NtfyTopic, opts.JobID, totalErrors)
 	}
 	return nil
