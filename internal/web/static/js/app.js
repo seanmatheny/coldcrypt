@@ -206,7 +206,7 @@ async function loadFiles(search = '') {
 
   if (noteEl) {
     if (!search && hasMore) {
-      noteEl.textContent = `Showing first 2\u202f000 files. Use the search box to find specific files.`;
+    noteEl.textContent = `Showing first ${files.length.toLocaleString()} files. Use the search box to find specific files.`;
       noteEl.classList.remove('d-none');
     } else {
       noteEl.classList.add('d-none');

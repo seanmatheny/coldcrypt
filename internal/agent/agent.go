@@ -152,7 +152,9 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 		walkErr := filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				log.Printf("walk error at %s: %v", path, err)
+				mu.Lock()
 				walkErrCount++
+				mu.Unlock()
 				return nil
 			}
 			if d.IsDir() {
