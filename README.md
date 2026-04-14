@@ -1,6 +1,6 @@
 # Coldcrypt 🔒
 
-A client-side encrypted backup manager with a web GUI, SFTP transfer, and automatic file versioning.
+A client-side encrypted backup manager with a web GUI, SCP transfer, and automatic file versioning.
 
 ---
 
@@ -8,7 +8,7 @@ A client-side encrypted backup manager with a web GUI, SFTP transfer, and automa
 
 - **Client-side AES-256-GCM encryption** — files are encrypted before leaving your machine; the remote server never sees plaintext or keys
 - **Argon2id key derivation** — strong, memory-hard KDF (time=1, memory=64 MiB, threads=4)
-- **SFTP transfer** — encrypted blobs uploaded over SSH/SFTP
+- **SCP transfer** — encrypted blobs uploaded over SSH/SCP
 - **File versioning** — up to 3 versions per file; when a 4th is written the oldest is automatically evicted from both DB and remote
 - **Incremental backups** — SHA-256 content hashing skips unchanged files
 - **Cron scheduler** — define recurring backup schedules via the web UI
@@ -29,7 +29,7 @@ coldcrypt/
 │   │   ├── encrypt.go             AES-256-GCM + Argon2id
 │   │   ├── agent.go               Backup logic (walk → hash → encrypt → upload)
 │   │   └── restore.go             Download + decrypt to local path
-│   ├── transfer/sftp.go           SSH/SFTP client
+│   ├── transfer/scp.go           SSH/SCP client
 │   ├── scheduler/scheduler.go     Cron-based scheduler
 │   └── web/
 │       ├── auth.go                Session store (24h TTL, crypto/rand IDs)
@@ -46,7 +46,7 @@ coldcrypt/
 3. Each file is encrypted with `AES-256-GCM`:
    - A fresh 12-byte nonce is generated per file per backup.
    - Output blob format: `[12-byte nonce][ciphertext+16-byte GCM tag]`
-4. The blob is uploaded to the remote SFTP server using a UUID filename.
+4. The blob is uploaded to the remote SCP server using a UUID filename.
 5. The remote server stores only opaque encrypted blobs — no filenames, no keys.
 
 ### Versioning strategy
@@ -112,8 +112,8 @@ At minimum set:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `remote_host` | — | SFTP server hostname/IP |
-| `remote_port` | `22` | SFTP server port |
+| `remote_host` | — | SCP server hostname/IP |
+| `remote_port` | `22` | SCP server port |
 | `remote_user` | — | SSH username |
 | `remote_key_path` | — | Path to SSH private key |
 | `remote_password` | — | SSH password (if not using key) |
@@ -281,7 +281,7 @@ sudo tail -f /var/log/coldcrypt/coldcrypt.log
 
 - **Argon2id parameters**: time=1, memory=64 MiB, threads=4, output=32 bytes. These are conservative; increase `time` for higher security at the cost of startup latency.
 - **AES-256-GCM** provides both confidentiality and integrity. Any tampering with a blob will cause decryption to fail.
-- **No keys on remote**: the SFTP server stores only opaque UUID-named blobs. Compromise of the remote server does not expose plaintext.
+- **No keys on remote**: the SCP server stores only opaque UUID-named blobs. Compromise of the remote server does not expose plaintext.
 - **Passphrase security**: use a long, random passphrase. Store it in a `passphrase_file` with mode `0600` rather than inline in `config.json`.
 - **TLS**: configure `web_tls_cert`/`web_tls_key` to enable HTTPS for the web UI.
 - **Sessions**: web UI sessions expire after 24 hours and use 32-byte cryptographically random IDs.
