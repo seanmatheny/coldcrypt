@@ -3,7 +3,7 @@ on:
         branches:
             - main
 
-name: Build Go app from puppet run
+name: Build Coldcrypt
 
 jobs:
     build_after_push:
