@@ -286,3 +286,4 @@ sudo tail -f /var/log/coldcrypt/coldcrypt.log
 - **TLS**: configure `web_tls_cert`/`web_tls_key` to enable HTTPS for the web UI.
 - **Sessions**: web UI sessions expire after 24 hours and use 32-byte cryptographically random IDs.
 - The SSH `HostKeyCallback` is set to `InsecureIgnoreHostKey` — for production use, replace with a known-hosts-based callback.
+.
