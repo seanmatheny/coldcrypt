@@ -1,0 +1,18 @@
+on:
+    push:
+        branches:
+            - main
+
+name: Build Go app from puppet run
+
+jobs:
+    build_after_push:
+        name: Run puppet on self-hosted runner to build code
+        runs-on:
+            - self-hosted
+            - squash
+
+        steps:
+            - name: Run puppet to pull and build code
+              run: |
+                  sudo /opt/puppetlabs/bin/puppet agent -t || [ $? -eq 2 ]
