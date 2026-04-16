@@ -300,6 +300,32 @@ func (h *handlers) handleRestoreFile(w http.ResponseWriter, r *http.Request, fil
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "restore started", "out_path": body.OutPath})
 }
 
+// POST /api/files/:id/purge
+func (h *handlers) handlePurgeFileVersion(w http.ResponseWriter, r *http.Request, fileID int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	var body struct {
+		VersionNum int `json:"version_num"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.VersionNum <= 0 {
+		writeError(w, http.StatusBadRequest, "version_num must be > 0")
+		return
+	}
+	remoteMissing, err := h.agent.PurgeFileVersion(r.Context(), fileID, body.VersionNum)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := map[string]interface{}{"status": "ok"}
+	if remoteMissing {
+		resp["warning"] = "Blob was already missing on remote; local database entry was removed."
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // POST /api/restore
 func (h *handlers) handleRestoreByPrefix(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
@@ -697,6 +723,17 @@ func (h *handlers) registerRoutes(mux *http.ServeMux) {
 				return
 			}
 			h.handleRestoreFile(w, r, id)
+		} else if strings.HasSuffix(path, "/purge") {
+			id, ok := parseIDFromPath(path, "/api/files/", "/purge")
+			if !ok {
+				writeError(w, http.StatusBadRequest, "invalid file id")
+				return
+			}
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			h.handlePurgeFileVersion(w, r, id)
 		} else {
 			writeError(w, http.StatusNotFound, "not found")
 		}

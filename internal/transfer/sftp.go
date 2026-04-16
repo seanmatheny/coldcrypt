@@ -156,7 +156,19 @@ func (c *Client) UploadBlob(remotePath, blobID string, r io.Reader) error {
 // DeleteBlob removes a remote blob by ID from its shard subdirectory.
 func (c *Client) DeleteBlob(remotePath, blobID string) error {
 	dest := filepath.Join(remotePath, blobShard(blobID), blobID)
-	return c.sftp.Remove(dest)
+	if err := c.sftp.Remove(dest); err != nil {
+		if os.IsNotExist(err) {
+			return os.ErrNotExist
+		}
+		// Some SFTP servers return a generic failure/error code when deleting a
+		// non-existent file. Confirm via Stat so callers can treat this as
+		// "already gone" instead of a hard purge failure.
+		if _, statErr := c.sftp.Stat(dest); statErr != nil && os.IsNotExist(statErr) {
+			return os.ErrNotExist
+		}
+		return fmt.Errorf("sftp remove %s: %w", dest, err)
+	}
+	return nil
 }
 
 // sshReadCloser wraps an SSH session's stdout so the caller can stream the

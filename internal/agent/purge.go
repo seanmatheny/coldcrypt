@@ -32,11 +32,13 @@ func isRemoteBlobMissing(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) || os.IsNotExist(err) {
 		return true
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "file does not exist") || strings.Contains(msg, "no such file")
+	return strings.Contains(msg, "file does not exist") ||
+		strings.Contains(msg, "no such file") ||
+		strings.Contains(msg, "not found")
 }
 
 // PurgeByPrefix deletes all backed-up blobs for files whose display_path starts
@@ -112,4 +114,49 @@ func (a *Agent) PurgeByPrefixWithReport(ctx context.Context, displayPrefix strin
 		return result, fmt.Errorf("purge completed with %d remote delete error(s); check logs for details", result.RemoteDeleteErrors)
 	}
 	return result, nil
+}
+
+// PurgeFileVersion deletes one file version from remote storage and local DB.
+// It returns true when the blob was already missing on the remote.
+func (a *Agent) PurgeFileVersion(ctx context.Context, fileID int64, versionNum int) (bool, error) {
+	versions, err := a.db.GetFileVersions(fileID)
+	if err != nil {
+		return false, fmt.Errorf("get versions: %w", err)
+	}
+	var blobID string
+	for _, v := range versions {
+		if v.VersionNum == versionNum {
+			blobID = v.BlobID
+			break
+		}
+	}
+	if blobID == "" {
+		return false, fmt.Errorf("version %d not found for file %d", versionNum, fileID)
+	}
+
+	client, err := transfer.NewClient(
+		a.cfg.RemoteHost,
+		a.cfg.RemotePort,
+		a.cfg.RemoteUser,
+		a.cfg.RemoteKeyPath,
+		a.cfg.RemotePassword,
+	)
+	if err != nil {
+		return false, fmt.Errorf("sftp connect: %w", err)
+	}
+	defer client.Close()
+
+	remoteMissing := false
+	if err := client.DeleteBlob(a.cfg.RemoteBasePath, blobID); err != nil {
+		if isRemoteBlobMissing(err) {
+			remoteMissing = true
+		} else {
+			return false, fmt.Errorf("delete remote blob: %w", err)
+		}
+	}
+
+	if _, err := a.db.DeleteFileVersion(fileID, versionNum); err != nil {
+		return remoteMissing, fmt.Errorf("delete db version: %w", err)
+	}
+	return remoteMissing, nil
 }

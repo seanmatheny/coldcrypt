@@ -246,10 +246,14 @@ function renderFlatList(files) {
     return;
   }
   files.forEach(f => {
+    const fileMeta = [fmtSize(f.Size || 0), fmtMtimeNS(f.MtimeNS)].join(' • ');
     const tr = document.createElement('tr');
     tr.className = 'file-row';
     tr.innerHTML = `
-      <td><i class="fa fa-file me-2 text-muted"></i>${esc(f.DisplayPath)}</td>
+      <td>
+        <i class="fa fa-file me-2 text-muted"></i>${esc(f.DisplayPath)}
+        <span class="text-muted small ms-2">${esc(fileMeta)}</span>
+      </td>
       <td>
         <button class="btn btn-sm btn-outline-info py-0 px-2" onclick="showVersions(${f.ID}, '${esc(f.DisplayPath)}')">
           <i class="fa fa-clock-rotate-left me-1"></i>Versions
@@ -365,19 +369,48 @@ async function showVersions(fileID, displayPath) {
   versions.forEach((v, i) => {
     const div = document.createElement('div');
     div.className = 'version-item d-flex align-items-center justify-content-between';
+    const mtime = fmtMtimeNS(v.MtimeNS);
     div.innerHTML = `
       <div>
         <span class="badge bg-secondary me-2">v${v.VersionNum}</span>
         <span class="small">${fmtDate(v.EncryptedAt)}</span>
         <span class="text-muted small ms-3">${fmtSize(v.Size)}</span>
+        <span class="text-muted small ms-3">${mtime}</span>
         <span class="text-muted small ms-3 font-monospace" title="${esc(v.Hash)}">${v.Hash.substring(0,12)}…</span>
       </div>
-      <button class="btn btn-sm btn-outline-success py-0 px-2"
-        onclick="promptRestore(${fileID}, ${v.VersionNum}, '${esc(displayPath)}')">
-        <i class="fa fa-download me-1"></i>Restore
-      </button>`;
+      <div class="d-flex gap-2">
+        <button class="btn btn-sm btn-outline-success py-0 px-2"
+          onclick="promptRestore(${fileID}, ${v.VersionNum}, '${esc(displayPath)}')">
+          <i class="fa fa-download me-1"></i>Restore
+        </button>
+        <button class="btn btn-sm btn-outline-danger py-0 px-2"
+          title="Purge this version permanently"
+          onclick="purgeVersion(${fileID}, ${v.VersionNum}, '${esc(displayPath)}')">
+          <i class="fa fa-trash"></i>
+        </button>
+      </div>`;
     body.appendChild(div);
   });
+}
+
+async function purgeVersion(fileID, versionNum, displayPath) {
+  const ok = window.confirm(`Purge version v${versionNum} for ${displayPath}? This cannot be undone.`);
+  if (!ok) return;
+
+  const r = await fetch(`/api/files/${fileID}/purge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version_num: versionNum })
+  });
+  if (r.ok) {
+    const d = await r.json().catch(() => ({}));
+    if (d.warning) alert(d.warning);
+    await showVersions(fileID, displayPath);
+    loadFiles();
+  } else {
+    const d = await r.json().catch(() => ({ error: 'Version purge failed' }));
+    alert(d.error || 'Version purge failed');
+  }
 }
 
 // Prompt to restore a single file version.
