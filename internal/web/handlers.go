@@ -404,19 +404,19 @@ func (h *handlers) handleDeleteSchedule(w http.ResponseWriter, r *http.Request, 
 // GET /api/config
 func (h *handlers) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	sanitized := map[string]interface{}{
-		"remote_host":      h.cfg.RemoteHost,
-		"remote_port":      h.cfg.RemotePort,
-		"remote_user":      h.cfg.RemoteUser,
-		"remote_key_path":  h.cfg.RemoteKeyPath,
-		"remote_password":  maskSecret(h.cfg.RemotePassword),
-		"remote_base_path": h.cfg.RemoteBasePath,
-		"source_dirs":      h.cfg.SourceDirs,
-		"exclude_paths":    h.cfg.ExcludePaths,
-		"web_port":         h.cfg.WebPort,
-		"data_dir":         h.cfg.DataDir,
-		"web_tls_cert":     h.cfg.WebTLSCert,
-		"web_tls_key":      h.cfg.WebTLSKey,
-		"ntfy_topic":       h.cfg.NtfyTopic,
+		"remote_host":               h.cfg.RemoteHost,
+		"remote_port":               h.cfg.RemotePort,
+		"remote_user":               h.cfg.RemoteUser,
+		"remote_key_path":           h.cfg.RemoteKeyPath,
+		"remote_password":           maskSecret(h.cfg.RemotePassword),
+		"remote_base_path":          h.cfg.RemoteBasePath,
+		"source_dirs":               h.cfg.SourceDirs,
+		"exclude_paths":             h.cfg.ExcludePaths,
+		"web_port":                  h.cfg.WebPort,
+		"data_dir":                  h.cfg.DataDir,
+		"web_tls_cert":              h.cfg.WebTLSCert,
+		"web_tls_key":               h.cfg.WebTLSKey,
+		"ntfy_topic":                h.cfg.NtfyTopic,
 		"deleted_retention_enabled": h.cfg.DeletedRetentionEnabled,
 		"deleted_retention_value":   h.cfg.DeletedRetentionValue,
 		"deleted_retention_unit":    h.cfg.DeletedRetentionUnit,
@@ -428,21 +428,21 @@ func (h *handlers) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var body struct {
-		RemoteHost     string   `json:"remote_host"`
-		RemotePort     int      `json:"remote_port"`
-		RemoteUser     string   `json:"remote_user"`
-		RemoteKeyPath  string   `json:"remote_key_path"`
-		RemotePassword string   `json:"remote_password"`
-		RemoteBasePath string   `json:"remote_base_path"`
-		SourceDirs     []string `json:"source_dirs"`
-		ExcludePaths   []string `json:"exclude_paths"`
-		WebPort        int      `json:"web_port"`
-		WebTLSCert     string   `json:"web_tls_cert"`
-		WebTLSKey      string   `json:"web_tls_key"`
-		NtfyTopic      string   `json:"ntfy_topic"`
-		DeletedRetentionEnabled bool   `json:"deleted_retention_enabled"`
-		DeletedRetentionValue   int    `json:"deleted_retention_value"`
-		DeletedRetentionUnit    string `json:"deleted_retention_unit"`
+		RemoteHost              string   `json:"remote_host"`
+		RemotePort              int      `json:"remote_port"`
+		RemoteUser              string   `json:"remote_user"`
+		RemoteKeyPath           string   `json:"remote_key_path"`
+		RemotePassword          string   `json:"remote_password"`
+		RemoteBasePath          string   `json:"remote_base_path"`
+		SourceDirs              []string `json:"source_dirs"`
+		ExcludePaths            []string `json:"exclude_paths"`
+		WebPort                 int      `json:"web_port"`
+		WebTLSCert              string   `json:"web_tls_cert"`
+		WebTLSKey               string   `json:"web_tls_key"`
+		NtfyTopic               string   `json:"ntfy_topic"`
+		DeletedRetentionEnabled bool     `json:"deleted_retention_enabled"`
+		DeletedRetentionValue   int      `json:"deleted_retention_value"`
+		DeletedRetentionUnit    string   `json:"deleted_retention_unit"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
