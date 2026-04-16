@@ -23,7 +23,6 @@ import (
 	"context"
 )
 
-
 // setupLogging configures the standard logger to write to both stderr and a log
 // file. If the log file cannot be opened, only stderr is used.
 // The returned function should be called with defer to close the file.
@@ -372,8 +371,6 @@ func copyFile(src, dst string) error {
 	return out.Sync()
 }
 
-
-
 func cmdChangePassword(args []string) {
 	fs := flag.NewFlagSet("change-password", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.json")
@@ -382,7 +379,7 @@ func cmdChangePassword(args []string) {
 	cfg, resolvedPath := loadConfig(*cfgPath)
 
 	password := promptPassword("New web UI password: ")
-	confirm  := promptPassword("Confirm password: ")
+	confirm := promptPassword("Confirm password: ")
 
 	if password != confirm {
 		fmt.Fprintln(os.Stderr, "passwords do not match")
