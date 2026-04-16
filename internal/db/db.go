@@ -295,6 +295,8 @@ func (d *DB) UpsertFileVersion(sourcePath, displayPath, blobID, hash string, siz
 	} else if err != nil {
 		return "", err
 	} else {
+		// Clear deleted_at when a previously-missing source file reappears and is
+		// being versioned again.
 		_, err = tx.Exec(`UPDATE files SET display_path=?, deleted_at=NULL WHERE id=?`, displayPath, fileID)
 		if err != nil {
 			return "", err

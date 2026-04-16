@@ -580,11 +580,10 @@ function updateActiveJobUI(status) {
     const windowMs = 15000;
     let prev = rateSamples[0];
     for (let i = rateSamples.length - 2; i >= 0; i--) {
+      prev = rateSamples[i];
       if (last.t - rateSamples[i].t >= windowMs) {
-        prev = rateSamples[i];
         break;
       }
-      prev = rateSamples[i];
     }
     const dt = (last.t - prev.t) / 1000;
     if (dt > 0) {
