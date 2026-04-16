@@ -15,6 +15,7 @@ let serverDataDir = '';  // populated after login; used as default restore path
 // Rate-graph state
 let rateSamples = [];       // [{t: number, bytes: number}]
 let lastActiveJobId = null;
+const RATE_WINDOW_MS = 15000;
 
 // Tracks which directory paths are expanded in the tree view.
 const expandedDirs = new Set();
@@ -577,13 +578,12 @@ function updateActiveJobUI(status) {
   let rateStr = '—';
   if (rateSamples.length >= 2) {
     const last = rateSamples[rateSamples.length - 1];
-    const windowMs = 15000;
     let prev = rateSamples[0];
     for (let i = rateSamples.length - 2; i >= 0; i--) {
-      prev = rateSamples[i];
-      if (last.t - rateSamples[i].t >= windowMs) {
+      if (last.t - rateSamples[i].t >= RATE_WINDOW_MS) {
         break;
       }
+      prev = rateSamples[i];
     }
     const dt = (last.t - prev.t) / 1000;
     if (dt > 0) {
