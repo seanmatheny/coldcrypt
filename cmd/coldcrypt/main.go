@@ -212,9 +212,10 @@ func cmdBackup(args []string) {
 
 	log.Printf("Starting backup job %d", jobID)
 	if err := a.Run(context.Background(), agent.BackupOptions{
-		SourceDirs:   dirs,
-		ExcludePaths: cfg.ExcludePaths,
-		JobID:        jobID,
+		SourceDirs:     dirs,
+		ExcludePaths:   cfg.ExcludePaths,
+		ExcludeRegexes: cfg.ExcludeRegexes,
+		JobID:          jobID,
 	}); err != nil {
 		log.Printf("backup failed: %v", err)
 		_ = database.UpdateJob(jobID, "failed", 0, 0, err.Error())

@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,9 +31,10 @@ const uploadWorkers = 4
 
 // BackupOptions configures a single backup run.
 type BackupOptions struct {
-	SourceDirs   []string
-	ExcludePaths []string
-	JobID        int64
+	SourceDirs     []string
+	ExcludePaths   []string
+	ExcludeRegexes []string
+	JobID          int64
 }
 
 // Agent performs backup and restore operations.
@@ -129,6 +131,11 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 	if !atomic.CompareAndSwapInt32(&a.running, 0, 1) {
 		return ErrAlreadyRunning
 	}
+	excludeRegex, err := compileExcludeRegexes(opts.ExcludeRegexes)
+	if err != nil {
+		atomic.StoreInt32(&a.running, 0)
+		return err
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	a.mu.Lock()
@@ -213,7 +220,6 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 				mu.Unlock()
 				if n > 0 {
 					atomic.AddInt64(&a.filesProc, int64(n))
-					atomic.AddInt64(&a.bytesXfer, b)
 				}
 			}
 		}(i)
@@ -235,12 +241,12 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 				return nil
 			}
 			if d.IsDir() {
-				if isExcluded(path, opts.ExcludePaths) {
+				if isExcluded(path, opts.ExcludePaths, excludeRegex) {
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			if isExcluded(path, opts.ExcludePaths) {
+			if isExcluded(path, opts.ExcludePaths, excludeRegex) {
 				return nil
 			}
 			seenPaths[path] = struct{}{}
@@ -262,7 +268,7 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 
 	// Optional source-deletion retention/cleanup.
 	if !errors.Is(ctx.Err(), context.Canceled) {
-		if _, retentionErrs := a.applyDeletedSourceRetention(ctx, opts, seenPaths); retentionErrs > 0 {
+		if _, retentionErrs := a.applyDeletedSourceRetention(ctx, opts, seenPaths, excludeRegex); retentionErrs > 0 {
 			mu.Lock()
 			errCount += retentionErrs
 			mu.Unlock()
@@ -302,7 +308,7 @@ func isWithinSourceDirs(path string, sourceDirs []string) bool {
 
 // applyDeletedSourceRetention marks missing files and purges expired retained
 // files when deleted-source retention is enabled.
-func (a *Agent) applyDeletedSourceRetention(ctx context.Context, opts BackupOptions, seenPaths map[string]struct{}) (removed int, errs int) {
+func (a *Agent) applyDeletedSourceRetention(ctx context.Context, opts BackupOptions, seenPaths map[string]struct{}, excludeRegex []*regexp.Regexp) (removed int, errs int) {
 	retention, ok := a.cfg.DeletedRetentionDuration()
 	if !ok {
 		return 0, 0
@@ -318,7 +324,7 @@ func (a *Agent) applyDeletedSourceRetention(ctx context.Context, opts BackupOpti
 	var expiredIDs []int64
 
 	for _, e := range entries {
-		if !isWithinSourceDirs(e.SourcePath, opts.SourceDirs) || isExcluded(e.SourcePath, opts.ExcludePaths) {
+		if !isWithinSourceDirs(e.SourcePath, opts.SourceDirs) || isExcluded(e.SourcePath, opts.ExcludePaths, excludeRegex) {
 			continue
 		}
 		if _, exists := seenPaths[e.SourcePath]; exists {
@@ -449,7 +455,16 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 		encErrCh <- err
 	}()
 
-	uploadErr := client.UploadBlob(a.cfg.RemoteBasePath, blobID, pr)
+	uploadErr := client.UploadBlob(
+		a.cfg.RemoteBasePath,
+		blobID,
+		&countingReader{
+			r: pr,
+			onRead: func(n int) {
+				atomic.AddInt64(&a.bytesXfer, int64(n))
+			},
+		},
+	)
 	if uploadErr != nil {
 		_ = pr.CloseWithError(uploadErr)
 	} else {
@@ -491,9 +506,40 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 	return 1, currSize, false
 }
 
+type countingReader struct {
+	r      io.Reader
+	onRead func(int)
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	if n > 0 && c.onRead != nil {
+		c.onRead(n)
+	}
+	return n, err
+}
+
+func compileExcludeRegexes(patterns []string) ([]*regexp.Regexp, error) {
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	for _, pattern := range patterns {
+		if pattern == "" {
+			continue
+		}
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid exclude regex %q: %w", pattern, err)
+		}
+		compiled = append(compiled, re)
+	}
+	return compiled, nil
+}
+
 // isExcluded reports whether path matches any of the given exclude paths.
 // A path is excluded if it equals an exclude entry or is nested under one.
-func isExcluded(path string, excludePaths []string) bool {
+func isExcluded(path string, excludePaths []string, excludeRegex []*regexp.Regexp) bool {
 	cleanPath := filepath.Clean(path)
 	for _, excl := range excludePaths {
 		if excl == "" {
@@ -501,6 +547,11 @@ func isExcluded(path string, excludePaths []string) bool {
 		}
 		cleanExcl := filepath.Clean(excl)
 		if cleanPath == cleanExcl || strings.HasPrefix(cleanPath, cleanExcl+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	for _, re := range excludeRegex {
+		if re.MatchString(path) {
 			return true
 		}
 	}
