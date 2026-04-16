@@ -172,6 +172,7 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 		bytesTransferred int64
 		errCount         int // files that could not be backed up
 	)
+	seenPaths := make(map[string]struct{})
 
 	workCh := make(chan fileWork, 64)
 
@@ -242,6 +243,7 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 			if isExcluded(path, opts.ExcludePaths) {
 				return nil
 			}
+			seenPaths[path] = struct{}{}
 			select {
 			case workCh <- fileWork{path: path, srcDir: srcDir}:
 			case <-ctx.Done():
@@ -257,6 +259,15 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 
 	close(workCh)
 	wg.Wait()
+
+	// Optional source-deletion retention/cleanup.
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		if _, retentionErrs := a.applyDeletedSourceRetention(ctx, opts, seenPaths); retentionErrs > 0 {
+			mu.Lock()
+			errCount += retentionErrs
+			mu.Unlock()
+		}
+	}
 
 	// Update job stats.
 	totalErrors := errCount + walkErrCount
@@ -276,6 +287,100 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 		notify.SendPartialFailure(a.cfg.NtfyTopic, opts.JobID, totalErrors)
 	}
 	return nil
+}
+
+func isWithinSourceDirs(path string, sourceDirs []string) bool {
+	cleanPath := filepath.Clean(path)
+	for _, src := range sourceDirs {
+		cleanSrc := filepath.Clean(src)
+		if cleanPath == cleanSrc || strings.HasPrefix(cleanPath, cleanSrc+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// applyDeletedSourceRetention marks missing files and purges expired retained
+// files when deleted-source retention is enabled.
+func (a *Agent) applyDeletedSourceRetention(ctx context.Context, opts BackupOptions, seenPaths map[string]struct{}) (removed int, errs int) {
+	retention, ok := a.cfg.DeletedRetentionDuration()
+	if !ok {
+		return 0, 0
+	}
+	entries, err := a.db.ListFileLifecycleEntries()
+	if err != nil {
+		log.Printf("deleted-retention: list files: %v", err)
+		return 0, 1
+	}
+
+	now := time.Now().UTC()
+	cutoff := now.Add(-retention)
+	var expiredIDs []int64
+
+	for _, e := range entries {
+		if !isWithinSourceDirs(e.SourcePath, opts.SourceDirs) || isExcluded(e.SourcePath, opts.ExcludePaths) {
+			continue
+		}
+		if _, exists := seenPaths[e.SourcePath]; exists {
+			if e.DeletedAt != nil {
+				if err := a.db.ClearFileDeleted(e.SourcePath); err != nil {
+					log.Printf("deleted-retention: clear marker %s: %v", e.SourcePath, err)
+					errs++
+				}
+			}
+			continue
+		}
+		if e.DeletedAt == nil {
+			if err := a.db.MarkFileDeletedIfUnset(e.SourcePath, now); err != nil {
+				log.Printf("deleted-retention: mark deleted %s: %v", e.SourcePath, err)
+				errs++
+			}
+			continue
+		}
+		if !e.DeletedAt.After(cutoff) {
+			expiredIDs = append(expiredIDs, e.ID)
+		}
+	}
+
+	if len(expiredIDs) == 0 || ctx.Err() != nil {
+		return 0, errs
+	}
+
+	blobIDs, err := a.db.ListBlobIDsByFileIDs(expiredIDs)
+	if err != nil {
+		log.Printf("deleted-retention: list blob ids: %v", err)
+		return 0, errs + 1
+	}
+
+	client, err := transfer.NewClient(
+		a.cfg.RemoteHost,
+		a.cfg.RemotePort,
+		a.cfg.RemoteUser,
+		a.cfg.RemoteKeyPath,
+		a.cfg.RemotePassword,
+	)
+	if err != nil {
+		log.Printf("deleted-retention: sftp connect: %v", err)
+		return 0, errs + 1
+	}
+	defer client.Close()
+
+	for _, blobID := range blobIDs {
+		if ctx.Err() != nil {
+			return 0, errs
+		}
+		if err := client.DeleteBlob(a.cfg.RemoteBasePath, blobID); err != nil && !isRemoteBlobMissing(err) {
+			log.Printf("deleted-retention: delete blob %s: %v", blobID, err)
+			errs++
+		}
+	}
+
+	if err := a.db.DeleteFilesByIDs(expiredIDs); err != nil {
+		log.Printf("deleted-retention: delete db records: %v", err)
+		return 0, errs + 1
+	}
+	log.Printf("deleted-retention: removed %d expired deleted file record(s)", len(expiredIDs))
+	return len(expiredIDs), errs
 }
 
 // processFile checks whether a file needs backing up, and if so encrypts and

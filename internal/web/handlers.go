@@ -404,19 +404,22 @@ func (h *handlers) handleDeleteSchedule(w http.ResponseWriter, r *http.Request, 
 // GET /api/config
 func (h *handlers) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	sanitized := map[string]interface{}{
-		"remote_host":      h.cfg.RemoteHost,
-		"remote_port":      h.cfg.RemotePort,
-		"remote_user":      h.cfg.RemoteUser,
-		"remote_key_path":  h.cfg.RemoteKeyPath,
-		"remote_password":  maskSecret(h.cfg.RemotePassword),
-		"remote_base_path": h.cfg.RemoteBasePath,
-		"source_dirs":      h.cfg.SourceDirs,
-		"exclude_paths":    h.cfg.ExcludePaths,
-		"web_port":         h.cfg.WebPort,
-		"data_dir":         h.cfg.DataDir,
-		"web_tls_cert":     h.cfg.WebTLSCert,
-		"web_tls_key":      h.cfg.WebTLSKey,
-		"ntfy_topic":       h.cfg.NtfyTopic,
+		"remote_host":               h.cfg.RemoteHost,
+		"remote_port":               h.cfg.RemotePort,
+		"remote_user":               h.cfg.RemoteUser,
+		"remote_key_path":           h.cfg.RemoteKeyPath,
+		"remote_password":           maskSecret(h.cfg.RemotePassword),
+		"remote_base_path":          h.cfg.RemoteBasePath,
+		"source_dirs":               h.cfg.SourceDirs,
+		"exclude_paths":             h.cfg.ExcludePaths,
+		"web_port":                  h.cfg.WebPort,
+		"data_dir":                  h.cfg.DataDir,
+		"web_tls_cert":              h.cfg.WebTLSCert,
+		"web_tls_key":               h.cfg.WebTLSKey,
+		"ntfy_topic":                h.cfg.NtfyTopic,
+		"deleted_retention_enabled": h.cfg.DeletedRetentionEnabled,
+		"deleted_retention_value":   h.cfg.DeletedRetentionValue,
+		"deleted_retention_unit":    h.cfg.DeletedRetentionUnit,
 	}
 	writeJSON(w, http.StatusOK, sanitized)
 }
@@ -425,18 +428,21 @@ func (h *handlers) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var body struct {
-		RemoteHost     string   `json:"remote_host"`
-		RemotePort     int      `json:"remote_port"`
-		RemoteUser     string   `json:"remote_user"`
-		RemoteKeyPath  string   `json:"remote_key_path"`
-		RemotePassword string   `json:"remote_password"`
-		RemoteBasePath string   `json:"remote_base_path"`
-		SourceDirs     []string `json:"source_dirs"`
-		ExcludePaths   []string `json:"exclude_paths"`
-		WebPort        int      `json:"web_port"`
-		WebTLSCert     string   `json:"web_tls_cert"`
-		WebTLSKey      string   `json:"web_tls_key"`
-		NtfyTopic      string   `json:"ntfy_topic"`
+		RemoteHost              string   `json:"remote_host"`
+		RemotePort              int      `json:"remote_port"`
+		RemoteUser              string   `json:"remote_user"`
+		RemoteKeyPath           string   `json:"remote_key_path"`
+		RemotePassword          string   `json:"remote_password"`
+		RemoteBasePath          string   `json:"remote_base_path"`
+		SourceDirs              []string `json:"source_dirs"`
+		ExcludePaths            []string `json:"exclude_paths"`
+		WebPort                 int      `json:"web_port"`
+		WebTLSCert              string   `json:"web_tls_cert"`
+		WebTLSKey               string   `json:"web_tls_key"`
+		NtfyTopic               string   `json:"ntfy_topic"`
+		DeletedRetentionEnabled bool     `json:"deleted_retention_enabled"`
+		DeletedRetentionValue   int      `json:"deleted_retention_value"`
+		DeletedRetentionUnit    string   `json:"deleted_retention_unit"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -477,6 +483,13 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	// NtfyTopic is assigned unconditionally so users can clear it by saving an empty string.
 	h.cfg.NtfyTopic = body.NtfyTopic
+	h.cfg.DeletedRetentionEnabled = body.DeletedRetentionEnabled
+	if body.DeletedRetentionValue >= 0 {
+		h.cfg.DeletedRetentionValue = body.DeletedRetentionValue
+	}
+	if body.DeletedRetentionUnit != "" {
+		h.cfg.DeletedRetentionUnit = body.DeletedRetentionUnit
+	}
 	if err := config.Save(h.cfg, h.cfgPath); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("save config: %v", err))
 		return
@@ -501,11 +514,19 @@ func (h *handlers) handlePurge(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if err := h.agent.PurgeByPrefix(r.Context(), req.DisplayPrefix); err != nil {
+	result, err := h.agent.PurgeByPrefixWithReport(r.Context(), req.DisplayPrefix)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	resp := map[string]interface{}{"status": "ok", "result": result}
+	if result.RemoteMissing > 0 {
+		resp["warning"] = fmt.Sprintf(
+			"%d blob(s) were already missing on remote and were removed from the local database.",
+			result.RemoteMissing,
+		)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // POST /api/notify/test
@@ -544,6 +565,8 @@ func (h *handlers) handleListDirChildren(w http.ResponseWriter, r *http.Request)
 		ID          int64  `json:"id"`
 		DisplayPath string `json:"display_path"`
 		Basename    string `json:"basename"`
+		Size        int64  `json:"size"`
+		MtimeNS     int64  `json:"mtime_ns"`
 	}
 
 	dirs := make([]dirItem, 0)
@@ -552,7 +575,13 @@ func (h *handlers) handleListDirChildren(w http.ResponseWriter, r *http.Request)
 		if c.IsDir {
 			dirs = append(dirs, dirItem{Name: c.Name, Path: prefix + c.Name + "/"})
 		} else {
-			files = append(files, fileItem{ID: c.FileID, DisplayPath: c.FullPath, Basename: c.Name})
+			files = append(files, fileItem{
+				ID:          c.FileID,
+				DisplayPath: c.FullPath,
+				Basename:    c.Name,
+				Size:        c.Size,
+				MtimeNS:     c.MtimeNS,
+			})
 		}
 	}
 	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name < dirs[j].Name })
