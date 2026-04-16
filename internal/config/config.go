@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 )
 
 type Config struct {
@@ -25,6 +27,11 @@ type Config struct {
 	DataDir         string   `json:"data_dir"`
 	KeySalt         string   `json:"key_salt"` // base64-encoded Argon2id salt
 	NtfyTopic       string   `json:"ntfy_topic,omitempty"`
+	// Optional deleted-source retention. When enabled, files missing from the
+	// source are retained for the configured value/unit before automatic purge.
+	DeletedRetentionEnabled bool   `json:"deleted_retention_enabled,omitempty"`
+	DeletedRetentionValue   int    `json:"deleted_retention_value,omitempty"`
+	DeletedRetentionUnit    string `json:"deleted_retention_unit,omitempty"` // "days" or "weeks"
 }
 
 func Load(path string) (*Config, error) {
@@ -44,6 +51,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.RemoteBasePath == "" {
 		cfg.RemoteBasePath = "/backup/coldcrypt"
+	}
+	if cfg.DeletedRetentionUnit == "" {
+		cfg.DeletedRetentionUnit = "days"
 	}
 	return &cfg, nil
 }
@@ -79,4 +89,20 @@ func (c *Config) GetPassphrase() (string, error) {
 // DefaultConfigPath returns the default config file path within dataDir.
 func DefaultConfigPath(dataDir string) string {
 	return filepath.Join(dataDir, "config.json")
+}
+
+// DeletedRetentionDuration returns the configured deleted-source retention
+// duration when the feature is enabled and valid.
+func (c *Config) DeletedRetentionDuration() (time.Duration, bool) {
+	if !c.DeletedRetentionEnabled || c.DeletedRetentionValue <= 0 {
+		return 0, false
+	}
+	switch strings.ToLower(c.DeletedRetentionUnit) {
+	case "", "day", "days":
+		return time.Duration(c.DeletedRetentionValue) * 24 * time.Hour, true
+	case "week", "weeks":
+		return time.Duration(c.DeletedRetentionValue) * 7 * 24 * time.Hour, true
+	default:
+		return 0, false
+	}
 }

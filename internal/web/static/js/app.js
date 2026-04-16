@@ -173,6 +173,7 @@ function bindGlobal() {
   document.getElementById('cfg-save-btn').addEventListener('click', saveConfig);
   document.getElementById('cfg-pwd-btn').addEventListener('click', changePassword);
   document.getElementById('cfg-ntfy-test-btn').addEventListener('click', testNotification);
+  document.getElementById('cfg-del-retain-enabled').addEventListener('change', toggleDeletedRetentionFields);
 }
 
 // ── Dashboard ──────────────────────────────────────────────────────────────
@@ -332,10 +333,11 @@ function renderLazyLevel(dirs, files, container, pathPrefix, depth) {
     const rowEl = document.createElement('div');
     rowEl.className = 'tree-row tree-file';
     rowEl.style.paddingLeft = indent + 'px';
+    const fileMeta = [fmtSize(f.size || 0), fmtMtimeNS(f.mtime_ns)].join(' • ');
     rowEl.innerHTML = `
       <span class="tree-toggle invisible" aria-hidden="true">▸</span>
       <i class="fa fa-file text-muted me-1"></i>
-      <span class="tree-name">${esc(f.basename)}</span>
+      <span class="tree-name">${esc(f.basename)} <span class="text-muted small ms-2">${esc(fileMeta)}</span></span>
       <span class="tree-actions">
         <button class="btn btn-xs btn-outline-info ms-2"
           onclick="event.stopPropagation(); showVersions(${f.id}, '${esc(f.display_path)}')">
@@ -477,7 +479,9 @@ async function doPurge() {
   btn.innerHTML = '<i class="fa fa-trash me-1"></i>Purge';
 
   if (r.ok) {
-    showMsg('purge-msg', 'Purge completed successfully.', 'success');
+    const d = await r.json().catch(() => ({}));
+    if (d.warning) showMsg('purge-msg', d.warning, 'warning');
+    else showMsg('purge-msg', 'Purge completed successfully.', 'success');
     setTimeout(() => { purgeModal.hide(); loadFiles(); }, 1500);
   } else {
     const d = await r.json().catch(() => ({ error: 'Purge failed' }));
@@ -569,11 +573,19 @@ function updateActiveJobUI(status) {
     if (rateSamples.length > 120) rateSamples.shift();
   }
 
-  // Compute current transfer rate from the last two samples.
+  // Compute transfer rate from a rolling window to reduce burst spikes.
   let rateStr = '—';
   if (rateSamples.length >= 2) {
     const last = rateSamples[rateSamples.length - 1];
-    const prev = rateSamples[rateSamples.length - 2];
+    const windowMs = 15000;
+    let prev = rateSamples[0];
+    for (let i = rateSamples.length - 2; i >= 0; i--) {
+      if (last.t - rateSamples[i].t >= windowMs) {
+        prev = rateSamples[i];
+        break;
+      }
+      prev = rateSamples[i];
+    }
     const dt = (last.t - prev.t) / 1000;
     if (dt > 0) {
       const rateVal = Math.max(0, (last.bytes - prev.bytes) / dt);
@@ -830,6 +842,10 @@ async function loadSettings() {
   document.getElementById('cfg-source-dirs').value = (cfg.source_dirs || []).join('\n');
   document.getElementById('cfg-exclude-paths').value = (cfg.exclude_paths || []).join('\n');
   document.getElementById('cfg-ntfy-topic').value  = cfg.ntfy_topic || '';
+  document.getElementById('cfg-del-retain-enabled').checked = !!cfg.deleted_retention_enabled;
+  document.getElementById('cfg-del-retain-value').value = cfg.deleted_retention_value || 14;
+  document.getElementById('cfg-del-retain-unit').value = cfg.deleted_retention_unit || 'days';
+  toggleDeletedRetentionFields();
 }
 
 async function saveConfig() {
@@ -841,7 +857,10 @@ async function saveConfig() {
     remote_base_path: document.getElementById('cfg-remote-path').value.trim(),
     source_dirs:      document.getElementById('cfg-source-dirs').value.split('\n').map(s => s.trim()).filter(Boolean),
     exclude_paths:    document.getElementById('cfg-exclude-paths').value.split('\n').map(s => s.trim()).filter(Boolean),
-    ntfy_topic:       document.getElementById('cfg-ntfy-topic').value.trim()
+    ntfy_topic:       document.getElementById('cfg-ntfy-topic').value.trim(),
+    deleted_retention_enabled: document.getElementById('cfg-del-retain-enabled').checked,
+    deleted_retention_value: Math.max(0, parseInt(document.getElementById('cfg-del-retain-value').value, 10) || 0),
+    deleted_retention_unit: document.getElementById('cfg-del-retain-unit').value
   };
   const r = await fetch('/api/config', {
     method: 'PUT',
@@ -912,6 +931,11 @@ function fmtDate(d) {
   } catch { return String(d); }
 }
 
+function fmtMtimeNS(ns) {
+  if (!ns) return 'unknown time';
+  return fmtDate(new Date(ns / 1e6).toISOString());
+}
+
 function esc(s) {
   return String(s || '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -923,4 +947,10 @@ function showMsg(elID, msg, type) {
   el.textContent = msg;
   el.className = `small alert alert-${type} py-1 mt-2`;
   el.classList.remove('d-none');
+}
+
+function toggleDeletedRetentionFields() {
+  const enabled = document.getElementById('cfg-del-retain-enabled').checked;
+  document.getElementById('cfg-del-retain-value').disabled = !enabled;
+  document.getElementById('cfg-del-retain-unit').disabled = !enabled;
 }

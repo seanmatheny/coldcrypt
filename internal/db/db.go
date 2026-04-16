@@ -36,6 +36,13 @@ type FileEntry struct {
 	DisplayPath string
 }
 
+// FileLifecycleEntry includes deletion-state metadata for a tracked file.
+type FileLifecycleEntry struct {
+	ID         int64
+	SourcePath string
+	DeletedAt  *time.Time
+}
+
 // FileVersion represents a single version of a backed-up file.
 type FileVersion struct {
 	ID          int64
@@ -63,7 +70,8 @@ const schema = `
 CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_path TEXT NOT NULL UNIQUE,
-    display_path TEXT NOT NULL
+    display_path TEXT NOT NULL,
+    deleted_at DATETIME
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_display_path ON files(display_path);
@@ -133,6 +141,12 @@ func New(dataDir string) (*DB, error) {
 	// migration is robust across SQLite driver versions.
 	if err := addColumnIfMissing(conn, "file_versions", "mtime_ns",
 		`ALTER TABLE file_versions ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return nil, err
+	}
+	// Add deleted_at column to existing databases that pre-date source-deletion
+	// retention tracking.
+	if err := addColumnIfMissing(conn, "files", "deleted_at",
+		`ALTER TABLE files ADD COLUMN deleted_at DATETIME`); err != nil {
 		return nil, err
 	}
 	return &DB{conn: conn}, nil
@@ -280,6 +294,11 @@ func (d *DB) UpsertFileVersion(sourcePath, displayPath, blobID, hash string, siz
 		}
 	} else if err != nil {
 		return "", err
+	} else {
+		_, err = tx.Exec(`UPDATE files SET display_path=?, deleted_at=NULL WHERE id=?`, displayPath, fileID)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	// Count existing versions.
@@ -658,6 +677,8 @@ type DirChild struct {
 	IsDir    bool
 	FileID   int64  // only set when IsDir is false
 	FullPath string // complete display_path; only set when IsDir is false
+	Size     int64  // latest backed-up size; only set when IsDir is false
+	MtimeNS  int64  // latest source mtime (ns); only set when IsDir is false
 }
 
 // ListDirectChildren returns the immediate children (files and sub-directory names) beneath
@@ -670,10 +691,21 @@ func (d *DB) ListDirectChildren(prefix string) ([]DirChild, error) {
 		err  error
 	)
 	if prefix == "" {
-		rows, err = d.conn.Query(`SELECT id, display_path FROM files ORDER BY display_path`)
+		rows, err = d.conn.Query(
+			`SELECT f.id, f.display_path,
+			        (SELECT fv.size FROM file_versions fv WHERE fv.file_id=f.id ORDER BY fv.encrypted_at DESC LIMIT 1) AS latest_size,
+			        (SELECT fv.mtime_ns FROM file_versions fv WHERE fv.file_id=f.id ORDER BY fv.encrypted_at DESC LIMIT 1) AS latest_mtime_ns
+			   FROM files f
+			  ORDER BY f.display_path`,
+		)
 	} else {
 		rows, err = d.conn.Query(
-			`SELECT id, display_path FROM files WHERE display_path LIKE ? ORDER BY display_path`,
+			`SELECT f.id, f.display_path,
+			        (SELECT fv.size FROM file_versions fv WHERE fv.file_id=f.id ORDER BY fv.encrypted_at DESC LIMIT 1) AS latest_size,
+			        (SELECT fv.mtime_ns FROM file_versions fv WHERE fv.file_id=f.id ORDER BY fv.encrypted_at DESC LIMIT 1) AS latest_mtime_ns
+			   FROM files f
+			  WHERE f.display_path LIKE ?
+			  ORDER BY f.display_path`,
 			prefix+"%",
 		)
 	}
@@ -687,7 +719,9 @@ func (d *DB) ListDirectChildren(prefix string) ([]DirChild, error) {
 	for rows.Next() {
 		var id int64
 		var dp string
-		if err := rows.Scan(&id, &dp); err != nil {
+		var latestSize sql.NullInt64
+		var latestMtimeNS sql.NullInt64
+		if err := rows.Scan(&id, &dp, &latestSize, &latestMtimeNS); err != nil {
 			return nil, err
 		}
 		rest := dp[len(prefix):]
@@ -703,7 +737,14 @@ func (d *DB) ListDirectChildren(prefix string) ([]DirChild, error) {
 				}
 			}
 		} else {
-			children = append(children, DirChild{Name: rest, IsDir: false, FileID: id, FullPath: dp})
+			child := DirChild{Name: rest, IsDir: false, FileID: id, FullPath: dp}
+			if latestSize.Valid {
+				child.Size = latestSize.Int64
+			}
+			if latestMtimeNS.Valid {
+				child.MtimeNS = latestMtimeNS.Int64
+			}
+			children = append(children, child)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -738,4 +779,104 @@ func (d *DB) Backup(destPath string) error {
 		return fmt.Errorf("vacuum into %s: %w", destPath, err)
 	}
 	return nil
+}
+
+// ListFileLifecycleEntries returns all tracked files and their source-deletion
+// marker timestamps.
+func (d *DB) ListFileLifecycleEntries() ([]FileLifecycleEntry, error) {
+	rows, err := d.conn.Query(`SELECT id, source_path, deleted_at FROM files`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FileLifecycleEntry
+	for rows.Next() {
+		var e FileLifecycleEntry
+		var deletedAtStr sql.NullString
+		if err := rows.Scan(&e.ID, &e.SourcePath, &deletedAtStr); err != nil {
+			return nil, err
+		}
+		if deletedAtStr.Valid {
+			if t, err := time.Parse(time.RFC3339, deletedAtStr.String); err == nil {
+				e.DeletedAt = &t
+			}
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// MarkFileDeletedIfUnset records when a source file first disappeared.
+func (d *DB) MarkFileDeletedIfUnset(sourcePath string, deletedAt time.Time) error {
+	_, err := d.conn.Exec(
+		`UPDATE files SET deleted_at=? WHERE source_path=? AND deleted_at IS NULL`,
+		deletedAt.UTC().Format(time.RFC3339), sourcePath,
+	)
+	return err
+}
+
+// ClearFileDeleted clears a file's deletion marker when it reappears.
+func (d *DB) ClearFileDeleted(sourcePath string) error {
+	_, err := d.conn.Exec(`UPDATE files SET deleted_at=NULL WHERE source_path=?`, sourcePath)
+	return err
+}
+
+// ListBlobIDsByFileIDs returns all version blob IDs for the provided file IDs.
+func (d *DB) ListBlobIDsByFileIDs(fileIDs []int64) ([]string, error) {
+	if len(fileIDs) == 0 {
+		return nil, nil
+	}
+	ph := make([]string, len(fileIDs))
+	args := make([]interface{}, len(fileIDs))
+	for i, id := range fileIDs {
+		ph[i] = "?"
+		args[i] = id
+	}
+	rows, err := d.conn.Query(
+		fmt.Sprintf(`SELECT blob_id FROM file_versions WHERE file_id IN (%s)`, strings.Join(ph, ",")),
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// DeleteFilesByIDs removes file/version rows for the provided file IDs.
+func (d *DB) DeleteFilesByIDs(fileIDs []int64) error {
+	if len(fileIDs) == 0 {
+		return nil
+	}
+	ph := make([]string, len(fileIDs))
+	args := make([]interface{}, len(fileIDs))
+	for i, id := range fileIDs {
+		ph[i] = "?"
+		args[i] = id
+	}
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	in := strings.Join(ph, ",")
+	if _, err = tx.Exec(fmt.Sprintf(`DELETE FROM file_versions WHERE file_id IN (%s)`, in), args...); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(fmt.Sprintf(`DELETE FROM files WHERE id IN (%s)`, in), args...); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
