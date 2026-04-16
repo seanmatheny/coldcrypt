@@ -119,6 +119,8 @@ At minimum set:
 | `remote_password` | — | SSH password (if not using key) |
 | `remote_base_path` | `/backup/coldcrypt` | Base directory on remote server |
 | `source_dirs` | `[]` | Directories to back up |
+| `exclude_paths` | `[]` | Absolute paths to exclude (and their descendants) |
+| `exclude_regexes` | `[]` | Regular expressions matched against source paths to exclude files/directories |
 | `passphrase` | — | Encryption passphrase (inline) |
 | `passphrase_file` | — | Path to file containing passphrase |
 | `web_port` | `8443` | Web UI port |

@@ -18,6 +18,7 @@ type Config struct {
 	RemoteBasePath  string   `json:"remote_base_path"`
 	SourceDirs      []string `json:"source_dirs"`
 	ExcludePaths    []string `json:"exclude_paths,omitempty"`
+	ExcludeRegexes  []string `json:"exclude_regexes,omitempty"`
 	PassphraseFile  string   `json:"passphrase_file,omitempty"`
 	Passphrase      string   `json:"passphrase,omitempty"`
 	WebPort         int      `json:"web_port"`

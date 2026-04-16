@@ -202,9 +202,10 @@ func (h *handlers) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		if err := h.agent.Run(context.Background(), agent.BackupOptions{
-			SourceDirs:   dirs,
-			ExcludePaths: h.cfg.ExcludePaths,
-			JobID:        jobID,
+			SourceDirs:     dirs,
+			ExcludePaths:   h.cfg.ExcludePaths,
+			ExcludeRegexes: h.cfg.ExcludeRegexes,
+			JobID:          jobID,
 		}); err != nil {
 			if errors.Is(err, agent.ErrAlreadyRunning) {
 				_ = h.db.UpdateJob(jobID, "skipped", 0, 0, err.Error())
@@ -438,6 +439,7 @@ func (h *handlers) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"remote_base_path":          h.cfg.RemoteBasePath,
 		"source_dirs":               h.cfg.SourceDirs,
 		"exclude_paths":             h.cfg.ExcludePaths,
+		"exclude_regexes":           h.cfg.ExcludeRegexes,
 		"web_port":                  h.cfg.WebPort,
 		"data_dir":                  h.cfg.DataDir,
 		"web_tls_cert":              h.cfg.WebTLSCert,
@@ -462,6 +464,7 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		RemoteBasePath          string   `json:"remote_base_path"`
 		SourceDirs              []string `json:"source_dirs"`
 		ExcludePaths            []string `json:"exclude_paths"`
+		ExcludeRegexes          []string `json:"exclude_regexes"`
 		WebPort                 int      `json:"web_port"`
 		WebTLSCert              string   `json:"web_tls_cert"`
 		WebTLSKey               string   `json:"web_tls_key"`
@@ -497,6 +500,9 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.ExcludePaths != nil {
 		h.cfg.ExcludePaths = body.ExcludePaths
+	}
+	if body.ExcludeRegexes != nil {
+		h.cfg.ExcludeRegexes = body.ExcludeRegexes
 	}
 	if body.WebPort != 0 {
 		h.cfg.WebPort = body.WebPort

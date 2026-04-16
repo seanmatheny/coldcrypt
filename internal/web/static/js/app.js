@@ -873,6 +873,7 @@ async function loadSettings() {
   document.getElementById('cfg-remote-path').value = cfg.remote_base_path || '';
   document.getElementById('cfg-source-dirs').value = (cfg.source_dirs || []).join('\n');
   document.getElementById('cfg-exclude-paths').value = (cfg.exclude_paths || []).join('\n');
+  document.getElementById('cfg-exclude-regexes').value = (cfg.exclude_regexes || []).join('\n');
   document.getElementById('cfg-ntfy-topic').value  = cfg.ntfy_topic || '';
   document.getElementById('cfg-del-retain-enabled').checked = !!cfg.deleted_retention_enabled;
   document.getElementById('cfg-del-retain-value').value = cfg.deleted_retention_value || 14;
@@ -889,6 +890,7 @@ async function saveConfig() {
     remote_base_path: document.getElementById('cfg-remote-path').value.trim(),
     source_dirs:      document.getElementById('cfg-source-dirs').value.split('\n').map(s => s.trim()).filter(Boolean),
     exclude_paths:    document.getElementById('cfg-exclude-paths').value.split('\n').map(s => s.trim()).filter(Boolean),
+    exclude_regexes:  document.getElementById('cfg-exclude-regexes').value.split('\n').map(s => s.trim()).filter(Boolean),
     ntfy_topic:       document.getElementById('cfg-ntfy-topic').value.trim(),
     deleted_retention_enabled: document.getElementById('cfg-del-retain-enabled').checked,
     deleted_retention_value: Math.max(0, parseInt(document.getElementById('cfg-del-retain-value').value, 10) || 0),

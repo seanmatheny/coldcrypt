@@ -122,9 +122,10 @@ func (s *Scheduler) runSchedule(scheduleID int64, name string, sourceDirs []stri
 
 	ctx := context.Background()
 	if err := s.agent.Run(ctx, agent.BackupOptions{
-		SourceDirs:   sourceDirs,
-		ExcludePaths: s.cfg.ExcludePaths,
-		JobID:        jobID,
+		SourceDirs:     sourceDirs,
+		ExcludePaths:   s.cfg.ExcludePaths,
+		ExcludeRegexes: s.cfg.ExcludeRegexes,
+		JobID:          jobID,
 	}); err != nil {
 		if errors.Is(err, agent.ErrAlreadyRunning) {
 			log.Printf("scheduler: skipping scheduled backup '%s': %v", name, err)

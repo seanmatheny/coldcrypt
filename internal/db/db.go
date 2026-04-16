@@ -706,13 +706,42 @@ func (d *DB) DeleteFilesByDisplayPrefix(prefix string) error {
 			return err
 		}
 	} else {
-		if _, err = tx.Exec(
-			`DELETE FROM file_versions WHERE file_id IN (SELECT id FROM files WHERE display_path LIKE ?)`,
-			prefix+"%",
-		); err != nil {
+		rows, qErr := tx.Query(`SELECT id FROM files WHERE display_path LIKE ?`, prefix+"%")
+		if qErr != nil {
+			return qErr
+		}
+		var fileIDs []int64
+		for rows.Next() {
+			var id int64
+			if scanErr := rows.Scan(&id); scanErr != nil {
+				_ = rows.Close()
+				return scanErr
+			}
+			fileIDs = append(fileIDs, id)
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			_ = rows.Close()
+			return rowsErr
+		}
+		if closeErr := rows.Close(); closeErr != nil {
+			return closeErr
+		}
+		if len(fileIDs) == 0 {
+			return tx.Commit()
+		}
+
+		ph := make([]string, len(fileIDs))
+		args := make([]interface{}, len(fileIDs))
+		for i, id := range fileIDs {
+			ph[i] = "?"
+			args[i] = id
+		}
+		in := strings.Join(ph, ",")
+
+		if _, err = tx.Exec(fmt.Sprintf(`DELETE FROM file_versions WHERE file_id IN (%s)`, in), args...); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(`DELETE FROM files WHERE display_path LIKE ?`, prefix+"%"); err != nil {
+		if _, err = tx.Exec(fmt.Sprintf(`DELETE FROM files WHERE id IN (%s)`, in), args...); err != nil {
 			return err
 		}
 	}

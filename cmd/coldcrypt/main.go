@@ -23,7 +23,6 @@ import (
 	"context"
 )
 
-
 // setupLogging configures the standard logger to write to both stderr and a log
 // file. If the log file cannot be opened, only stderr is used.
 // The returned function should be called with defer to close the file.
@@ -212,9 +211,10 @@ func cmdBackup(args []string) {
 
 	log.Printf("Starting backup job %d", jobID)
 	if err := a.Run(context.Background(), agent.BackupOptions{
-		SourceDirs:   dirs,
-		ExcludePaths: cfg.ExcludePaths,
-		JobID:        jobID,
+		SourceDirs:     dirs,
+		ExcludePaths:   cfg.ExcludePaths,
+		ExcludeRegexes: cfg.ExcludeRegexes,
+		JobID:          jobID,
 	}); err != nil {
 		log.Printf("backup failed: %v", err)
 		_ = database.UpdateJob(jobID, "failed", 0, 0, err.Error())
@@ -371,8 +371,6 @@ func copyFile(src, dst string) error {
 	return out.Sync()
 }
 
-
-
 func cmdChangePassword(args []string) {
 	fs := flag.NewFlagSet("change-password", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.json")
@@ -381,7 +379,7 @@ func cmdChangePassword(args []string) {
 	cfg, resolvedPath := loadConfig(*cfgPath)
 
 	password := promptPassword("New web UI password: ")
-	confirm  := promptPassword("Confirm password: ")
+	confirm := promptPassword("Confirm password: ")
 
 	if password != confirm {
 		fmt.Fprintln(os.Stderr, "passwords do not match")
