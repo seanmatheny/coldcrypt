@@ -34,6 +34,8 @@ type FileEntry struct {
 	ID          int64
 	SourcePath  string
 	DisplayPath string
+	Size        int64
+	MtimeNS     int64
 }
 
 // FileLifecycleEntry includes deletion-state metadata for a tracked file.
@@ -50,6 +52,7 @@ type FileVersion struct {
 	VersionNum  int
 	BlobID      string
 	Size        int64
+	MtimeNS     int64
 	Hash        string
 	EncryptedAt time.Time
 	JobID       int64
@@ -410,7 +413,10 @@ func (d *DB) CountFiles() (int64, error) {
 // When limit > 0, at most limit+1 rows are fetched so the caller can detect
 // truncation (len(result) > limit) without a separate COUNT query.
 func (d *DB) ListFiles(search string, limit int) ([]FileEntry, error) {
-	query := `SELECT id, source_path, display_path FROM files`
+	query := `SELECT f.id, f.source_path, f.display_path,
+		COALESCE((SELECT fv.size FROM file_versions fv WHERE fv.file_id=f.id ORDER BY fv.encrypted_at DESC LIMIT 1), 0) AS latest_size,
+		COALESCE((SELECT fv.mtime_ns FROM file_versions fv WHERE fv.file_id=f.id ORDER BY fv.encrypted_at DESC LIMIT 1), 0) AS latest_mtime_ns
+		FROM files f`
 	args := []interface{}{}
 	if search != "" {
 		query += ` WHERE display_path LIKE ?`
@@ -429,7 +435,7 @@ func (d *DB) ListFiles(search string, limit int) ([]FileEntry, error) {
 	var files []FileEntry
 	for rows.Next() {
 		var f FileEntry
-		if err := rows.Scan(&f.ID, &f.SourcePath, &f.DisplayPath); err != nil {
+		if err := rows.Scan(&f.ID, &f.SourcePath, &f.DisplayPath, &f.Size, &f.MtimeNS); err != nil {
 			return nil, err
 		}
 		files = append(files, f)
@@ -440,7 +446,7 @@ func (d *DB) ListFiles(search string, limit int) ([]FileEntry, error) {
 // GetFileVersions returns all versions for a file ordered newest first.
 func (d *DB) GetFileVersions(fileID int64) ([]FileVersion, error) {
 	rows, err := d.conn.Query(
-		`SELECT id, file_id, version_num, blob_id, size, hash, encrypted_at, job_id FROM file_versions WHERE file_id=? ORDER BY encrypted_at DESC`,
+		`SELECT id, file_id, version_num, blob_id, size, mtime_ns, hash, encrypted_at, job_id FROM file_versions WHERE file_id=? ORDER BY encrypted_at DESC`,
 		fileID,
 	)
 	if err != nil {
@@ -451,13 +457,55 @@ func (d *DB) GetFileVersions(fileID int64) ([]FileVersion, error) {
 	for rows.Next() {
 		var v FileVersion
 		var encStr string
-		if err := rows.Scan(&v.ID, &v.FileID, &v.VersionNum, &v.BlobID, &v.Size, &v.Hash, &encStr, &v.JobID); err != nil {
+		if err := rows.Scan(&v.ID, &v.FileID, &v.VersionNum, &v.BlobID, &v.Size, &v.MtimeNS, &v.Hash, &encStr, &v.JobID); err != nil {
 			return nil, err
 		}
 		v.EncryptedAt, _ = time.Parse(time.RFC3339, encStr)
 		versions = append(versions, v)
 	}
 	return versions, rows.Err()
+}
+
+// DeleteFileVersion removes one version row by (file_id, version_num) and
+// deletes the parent file row if it no longer has any versions. It returns the
+// removed blob ID.
+func (d *DB) DeleteFileVersion(fileID int64, versionNum int) (string, error) {
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var versionID int64
+	var blobID string
+	err = tx.QueryRow(
+		`SELECT id, blob_id FROM file_versions WHERE file_id=? AND version_num=?`,
+		fileID, versionNum,
+	).Scan(&versionID, &blobID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", errors.New("version not found")
+	}
+	if err != nil {
+		return "", err
+	}
+
+	if _, err = tx.Exec(`DELETE FROM file_versions WHERE id=?`, versionID); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec(
+		`DELETE FROM files WHERE id=? AND NOT EXISTS (SELECT 1 FROM file_versions WHERE file_id=?)`,
+		fileID, fileID,
+	); err != nil {
+		return "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return "", err
+	}
+	return blobID, nil
 }
 
 // GetFileByID returns a file entry by ID.
