@@ -292,13 +292,32 @@ func (h *handlers) handleRestoreFile(w http.ResponseWriter, r *http.Request, fil
 		writeError(w, http.StatusBadRequest, "out_path is required")
 		return
 	}
+	if h.agent.IsRestoreRunning() {
+		writeError(w, http.StatusConflict, "a restore job is already in progress")
+		return
+	}
+
+	jobID, err := h.db.CreateJobWithType("restore")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	go func() {
-		if err := h.agent.RestoreFile(context.Background(), fileID, body.VersionNum, body.OutPath); err != nil {
+		filesProcessed, bytesTransferred, err := h.agent.RestoreFile(context.Background(), jobID, fileID, body.VersionNum, body.OutPath)
+		if err != nil {
 			log.Printf("restore file %d version %d error: %v", fileID, body.VersionNum, err)
+			_ = h.db.UpdateJob(jobID, "failed", filesProcessed, bytesTransferred, err.Error())
+			return
 		}
+		_ = h.db.UpdateJob(jobID, "completed", filesProcessed, bytesTransferred, "")
 	}()
 
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "restore started", "out_path": body.OutPath})
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":   "restore started",
+		"out_path": body.OutPath,
+		"job_id":   jobID,
+	})
 }
 
 // POST /api/files/:id/purge
@@ -343,14 +362,37 @@ func (h *handlers) handleRestoreByPrefix(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "out_path is required")
 		return
 	}
+	if h.agent.IsRestoreRunning() {
+		writeError(w, http.StatusConflict, "a restore job is already in progress")
+		return
+	}
+
+	jobID, err := h.db.CreateJobWithType("restore")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	go func() {
-		if err := h.agent.RestoreByPrefix(context.Background(), req.DisplayPrefix, req.OutPath, req.VersionNum); err != nil {
+		filesProcessed, bytesTransferred, errCount, err := h.agent.RestoreByPrefix(context.Background(), jobID, req.DisplayPrefix, req.OutPath, req.VersionNum)
+		if err != nil {
 			log.Printf("restore prefix %q error: %v", req.DisplayPrefix, err)
+			_ = h.db.UpdateJob(jobID, "failed", filesProcessed, bytesTransferred, err.Error())
+			return
 		}
+		if errCount > 0 {
+			msg := fmt.Sprintf("%d file(s) could not be restored", errCount)
+			_ = h.db.UpdateJob(jobID, "completed_with_errors", filesProcessed, bytesTransferred, msg)
+			return
+		}
+		_ = h.db.UpdateJob(jobID, "completed", filesProcessed, bytesTransferred, "")
 	}()
 
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "restore started", "out_path": req.OutPath})
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":   "restore started",
+		"out_path": req.OutPath,
+		"job_id":   jobID,
+	})
 }
 
 // GET /api/schedules
@@ -632,8 +674,12 @@ func (h *handlers) handleGetActiveJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status := h.agent.GetStatus()
+	if !status.Running {
+		status = h.agent.GetRestoreStatus()
+	}
 	resp := map[string]interface{}{
 		"running":           status.Running,
+		"job_type":          status.JobType,
 		"job_id":            status.JobID,
 		"current_file":      status.CurrentFile,
 		"files_processed":   status.FilesProcessed,

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"github.com/seanmatheny/coldcrypt/internal/agent"
 	"github.com/seanmatheny/coldcrypt/internal/config"
 	"github.com/seanmatheny/coldcrypt/internal/db"
+	"github.com/seanmatheny/coldcrypt/internal/dbdump"
 	"github.com/seanmatheny/coldcrypt/internal/scheduler"
 	"github.com/seanmatheny/coldcrypt/internal/web"
 
@@ -74,8 +76,8 @@ Usage:
   coldcrypt serve [--config path]       Start web server and scheduler
   coldcrypt backup [--config path] [dirs...]  Run a one-off backup
   coldcrypt purge [--config path] [--path <display-prefix>]  Permanently delete backed-up blobs
-  coldcrypt db-dump [--config path] --out <file>  Dump a copy of the database
-  coldcrypt db-restore [--config path] --from <file>  Restore a database dump
+  coldcrypt db-dump [--config path] --out <file> [--no-encrypt]  Dump a copy of the database
+  coldcrypt db-restore [--config path] --from <file>  Restore a database dump (plain or encrypted)
   coldcrypt change-password [--config path]   Change the web UI password
 `)
 }
@@ -286,12 +288,14 @@ func cmdDBDump(args []string) {
 	fs := flag.NewFlagSet("db-dump", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.json")
 	outPath := fs.String("out", "", "destination file for the database copy (required)")
+	noEncrypt := fs.Bool("no-encrypt", false, "write plaintext dump output")
 	_ = fs.Parse(args)
 
 	if *outPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: coldcrypt db-dump --config <path> --out <file>")
+		fmt.Fprintln(os.Stderr, "usage: coldcrypt db-dump --config <path> --out <file> [--no-encrypt]")
 		os.Exit(1)
 	}
+	useEncryption := !*noEncrypt
 
 	cfg, _ := loadConfig(*cfgPath)
 
@@ -301,10 +305,50 @@ func cmdDBDump(args []string) {
 	}
 	defer database.Close()
 
-	if err := database.Backup(*outPath); err != nil {
+	if !useEncryption {
+		if err := database.Backup(*outPath); err != nil {
+			log.Fatalf("db-dump: %v", err)
+		}
+		fmt.Printf("Database backed up to: %s\n", *outPath)
+		return
+	}
+
+	passphrase, err := cfg.GetPassphrase()
+	if err != nil {
+		log.Fatalf("db-dump: get passphrase: %v", err)
+	}
+
+	tmp, err := os.CreateTemp("", "coldcrypt-dbdump-*.db")
+	if err != nil {
+		log.Fatalf("db-dump: create temp file: %v", err)
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	defer os.Remove(tmpPath)
+
+	if err := database.Backup(tmpPath); err != nil {
 		log.Fatalf("db-dump: %v", err)
 	}
-	fmt.Printf("Database backed up to: %s\n", *outPath)
+
+	src, err := os.Open(tmpPath)
+	if err != nil {
+		log.Fatalf("db-dump: open temp dump: %v", err)
+	}
+	defer src.Close()
+
+	dst, err := os.OpenFile(*outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		log.Fatalf("db-dump: open destination: %v", err)
+	}
+	defer dst.Close()
+
+	if err := dbdump.EncryptOpenSSLAES256CBC(passphrase, src, dst); err != nil {
+		log.Fatalf("db-dump: encrypt output: %v", err)
+	}
+	if err := dst.Sync(); err != nil {
+		log.Fatalf("db-dump: sync destination: %v", err)
+	}
+	fmt.Printf("Encrypted database backup written to: %s\n", *outPath)
 }
 
 // ── db-restore ─────────────────────────────────────────────────────────────
@@ -327,6 +371,30 @@ func cmdDBRestore(args []string) {
 
 	cfg, _ := loadConfig(*cfgPath)
 	destPath := filepath.Join(cfg.DataDir, "coldcrypt.db")
+	restorePath := *fromPath
+
+	encrypted, err := isOpenSSLEncryptedDump(*fromPath)
+	if err != nil {
+		log.Fatalf("db-restore: inspect source dump: %v", err)
+	}
+	if encrypted {
+		passphrase, err := cfg.GetPassphrase()
+		if err != nil {
+			log.Fatalf("db-restore: get passphrase: %v", err)
+		}
+		tmp, err := os.CreateTemp("", "coldcrypt-dbrestore-*.db")
+		if err != nil {
+			log.Fatalf("db-restore: create temp file: %v", err)
+		}
+		tmpPath := tmp.Name()
+		_ = tmp.Close()
+		defer os.Remove(tmpPath)
+
+		if err := decryptDumpFile(*fromPath, tmpPath, passphrase); err != nil {
+			log.Fatalf("db-restore: decrypt dump: %v", err)
+		}
+		restorePath = tmpPath
+	}
 
 	if !*yes {
 		fmt.Printf("WARNING: This will overwrite %s with %s.\n", destPath, *fromPath)
@@ -339,7 +407,7 @@ func cmdDBRestore(args []string) {
 		}
 	}
 
-	if err := copyFile(*fromPath, destPath); err != nil {
+	if err := copyFile(restorePath, destPath); err != nil {
 		log.Fatalf("db-restore: %v", err)
 	}
 
@@ -349,6 +417,43 @@ func cmdDBRestore(args []string) {
 	}
 
 	fmt.Printf("Database restored from %s to %s\n", *fromPath, destPath)
+}
+
+func isOpenSSLEncryptedDump(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	header := make([]byte, 8)
+	n, err := io.ReadFull(f, header)
+	if err != nil {
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			return false, nil
+		}
+		return false, err
+	}
+	return n == 8 && bytes.Equal(header, []byte(dbdump.OpenSSLSaltedPrefix)), nil
+}
+
+func decryptDumpFile(srcPath, dstPath, passphrase string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("open source: %w", err)
+	}
+	defer src.Close()
+
+	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("open destination: %w", err)
+	}
+	defer dst.Close()
+
+	if err := dbdump.DecryptOpenSSLAES256CBC(passphrase, src, dst); err != nil {
+		return err
+	}
+	return dst.Sync()
 }
 
 // copyFile copies the file at src to dst, creating or truncating dst.

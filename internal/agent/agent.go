@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,6 +26,9 @@ import (
 
 // ErrAlreadyRunning is returned by Run when a backup job is already in progress.
 var ErrAlreadyRunning = errors.New("a backup job is already in progress")
+
+// ErrRestoreAlreadyRunning is returned when a restore job is already in progress.
+var ErrRestoreAlreadyRunning = errors.New("a restore job is already in progress")
 
 // uploadWorkers is the number of concurrent encrypt-and-upload goroutines.
 const uploadWorkers = 4
@@ -44,6 +48,8 @@ type Agent struct {
 	key     []byte
 	running int32 // atomic: 1 while a backup job is running
 
+	restoreRunning int32 // atomic: 1 while a restore job is running
+
 	// mu guards cancelFn, currentFile, jobID, and jobStart.
 	mu          sync.RWMutex
 	cancelFn    context.CancelFunc
@@ -54,11 +60,21 @@ type Agent struct {
 	// Atomic live counters, reset at job start.
 	filesProc int64
 	bytesXfer int64
+
+	// Atomic live counters for restore jobs, reset at restore start.
+	restoreFilesProc int64
+	restoreBytesXfer int64
+
+	// Restore job metadata (guarded by mu).
+	restoreCurrentFile string
+	restoreJobID       int64
+	restoreJobStart    time.Time
 }
 
 // AgentStatus holds a snapshot of the agent's current state for the live UI.
 type AgentStatus struct {
 	Running          bool
+	JobType          string
 	JobID            int64
 	CurrentFile      string
 	FilesProcessed   int64
@@ -75,10 +91,29 @@ func (a *Agent) GetStatus() AgentStatus {
 	a.mu.RUnlock()
 	return AgentStatus{
 		Running:          atomic.LoadInt32(&a.running) == 1,
+		JobType:          "backup",
 		JobID:            jid,
 		CurrentFile:      cf,
 		FilesProcessed:   atomic.LoadInt64(&a.filesProc),
 		BytesTransferred: atomic.LoadInt64(&a.bytesXfer),
+		StartedAt:        jstart,
+	}
+}
+
+// GetRestoreStatus returns a consistent snapshot of the current restore job.
+func (a *Agent) GetRestoreStatus() AgentStatus {
+	a.mu.RLock()
+	cf := a.restoreCurrentFile
+	jid := a.restoreJobID
+	jstart := a.restoreJobStart
+	a.mu.RUnlock()
+	return AgentStatus{
+		Running:          atomic.LoadInt32(&a.restoreRunning) == 1,
+		JobType:          "restore",
+		JobID:            jid,
+		CurrentFile:      cf,
+		FilesProcessed:   atomic.LoadInt64(&a.restoreFilesProc),
+		BytesTransferred: atomic.LoadInt64(&a.restoreBytesXfer),
 		StartedAt:        jstart,
 	}
 }
@@ -118,6 +153,40 @@ func New(cfg *config.Config, database *db.DB) (*Agent, error) {
 // IsRunning reports whether a backup job is currently in progress.
 func (a *Agent) IsRunning() bool {
 	return atomic.LoadInt32(&a.running) == 1
+}
+
+// IsRestoreRunning reports whether a restore job is currently in progress.
+func (a *Agent) IsRestoreRunning() bool {
+	return atomic.LoadInt32(&a.restoreRunning) == 1
+}
+
+func (a *Agent) startRestore(jobID int64) error {
+	if !atomic.CompareAndSwapInt32(&a.restoreRunning, 0, 1) {
+		return ErrRestoreAlreadyRunning
+	}
+	a.mu.Lock()
+	a.restoreJobID = jobID
+	a.restoreJobStart = time.Now()
+	a.restoreCurrentFile = ""
+	a.mu.Unlock()
+	atomic.StoreInt64(&a.restoreFilesProc, 0)
+	atomic.StoreInt64(&a.restoreBytesXfer, 0)
+	return nil
+}
+
+func (a *Agent) finishRestore() {
+	atomic.StoreInt32(&a.restoreRunning, 0)
+	a.mu.Lock()
+	a.restoreCurrentFile = ""
+	a.restoreJobID = 0
+	a.restoreJobStart = time.Time{}
+	a.mu.Unlock()
+}
+
+func (a *Agent) setRestoreCurrentFile(path string) {
+	a.mu.Lock()
+	a.restoreCurrentFile = path
+	a.mu.Unlock()
 }
 
 // fileWork is a single file to be processed by the worker pool.
@@ -322,6 +391,7 @@ func (a *Agent) applyDeletedSourceRetention(ctx context.Context, opts BackupOpti
 	now := time.Now().UTC()
 	cutoff := now.Add(-retention)
 	var expiredIDs []int64
+	var expiredPaths []string
 
 	for _, e := range entries {
 		if !isWithinSourceDirs(e.SourcePath, opts.SourceDirs) || isExcluded(e.SourcePath, opts.ExcludePaths, excludeRegex) {
@@ -345,6 +415,7 @@ func (a *Agent) applyDeletedSourceRetention(ctx context.Context, opts BackupOpti
 		}
 		if !e.DeletedAt.After(cutoff) {
 			expiredIDs = append(expiredIDs, e.ID)
+			expiredPaths = append(expiredPaths, e.SourcePath)
 		}
 	}
 
@@ -384,6 +455,10 @@ func (a *Agent) applyDeletedSourceRetention(ctx context.Context, opts BackupOpti
 	if err := a.db.DeleteFilesByIDs(expiredIDs); err != nil {
 		log.Printf("deleted-retention: delete db records: %v", err)
 		return 0, errs + 1
+	}
+	sort.Strings(expiredPaths)
+	for _, p := range expiredPaths {
+		log.Printf("deleted-retention: removed expired deleted file: %s", p)
 	}
 	log.Printf("deleted-retention: removed %d expired deleted file record(s)", len(expiredIDs))
 	return len(expiredIDs), errs

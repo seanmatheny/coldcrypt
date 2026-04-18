@@ -467,11 +467,15 @@ async function doRestore() {
   }
 
   if (r.ok) {
+    const d = await r.json().catch(() => ({}));
+    const idPart = d.job_id ? ` (Job #${d.job_id})` : '';
     const msg = restoreFileID !== null
-      ? `Restore started. File will appear at: ${outPath}`
-      : `Restore started. Files will appear in: ${outPath}`;
+      ? `Restore started${idPart}. File will appear at: ${outPath}`
+      : `Restore started${idPart}. Files will appear in: ${outPath}`;
     showMsg('restore-msg', msg, 'success');
     setTimeout(() => restoreModal.hide(), 2000);
+    if (currentSection === 'jobs') loadJobs();
+    if (currentSection === 'dashboard') loadDashboard();
   } else {
     const d = await r.json().catch(() => ({ error: 'Restore failed' }));
     showMsg('restore-msg', d.error || 'Restore failed', 'danger');
@@ -596,6 +600,8 @@ async function pollActiveJob() {
 
 function updateActiveJobUI(status) {
   const isRunning = status.running;
+  const isBackupJob = (status.job_type || 'backup') === 'backup';
+  const runningLabel = isBackupJob ? 'BACKUP RUNNING' : 'RESTORE RUNNING';
 
   // Accumulate rate samples.
   if (isRunning) {
@@ -630,8 +636,12 @@ function updateActiveJobUI(status) {
   if (panel) {
     if (isRunning) {
       panel.classList.remove('d-none');
+      const badgeEl = panel.querySelector('.badge');
+      if (badgeEl) badgeEl.textContent = runningLabel;
       const jobIdEl = document.getElementById('active-job-id');
       if (jobIdEl) jobIdEl.textContent = `Job #${status.job_id}`;
+      const stopBtn = document.getElementById('stop-job-btn');
+      if (stopBtn) stopBtn.classList.toggle('d-none', !isBackupJob);
       const fileEl = document.getElementById('active-job-file');
       if (fileEl) fileEl.textContent = status.current_file || '—';
       const filesEl = document.getElementById('active-job-files');
@@ -652,8 +662,12 @@ function updateActiveJobUI(status) {
   if (dashPanel) {
     if (isRunning) {
       dashPanel.classList.remove('d-none');
+      const badgeEl = dashPanel.querySelector('.badge');
+      if (badgeEl) badgeEl.textContent = runningLabel;
       const el = document.getElementById('dash-active-job-id');
       if (el) el.textContent = `Job #${status.job_id}`;
+      const stopBtn = document.getElementById('dash-stop-btn');
+      if (stopBtn) stopBtn.classList.toggle('d-none', !isBackupJob);
       const fileEl = document.getElementById('dash-active-file');
       if (fileEl) fileEl.textContent = status.current_file || '—';
       const filesEl = document.getElementById('dash-active-files');
