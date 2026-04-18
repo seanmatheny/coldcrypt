@@ -288,7 +288,6 @@ func cmdDBDump(args []string) {
 	fs := flag.NewFlagSet("db-dump", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.json")
 	outPath := fs.String("out", "", "destination file for the database copy (required)")
-	encrypt := fs.Bool("encrypt", true, "encrypt dump output using config passphrase (default: true)")
 	noEncrypt := fs.Bool("no-encrypt", false, "write plaintext dump output")
 	_ = fs.Parse(args)
 
@@ -296,11 +295,7 @@ func cmdDBDump(args []string) {
 		fmt.Fprintln(os.Stderr, "usage: coldcrypt db-dump --config <path> --out <file> [--no-encrypt]")
 		os.Exit(1)
 	}
-	if *encrypt && *noEncrypt {
-		fmt.Fprintln(os.Stderr, "choose either --encrypt or --no-encrypt, not both")
-		os.Exit(1)
-	}
-	useEncryption := *encrypt && !*noEncrypt
+	useEncryption := !*noEncrypt
 
 	cfg, _ := loadConfig(*cfgPath)
 
@@ -439,7 +434,7 @@ func isOpenSSLEncryptedDump(path string) (bool, error) {
 		}
 		return false, err
 	}
-	return n == 8 && bytes.Equal(header, []byte("Salted__")), nil
+	return n == 8 && bytes.Equal(header, []byte(dbdump.OpenSSLSaltedPrefix)), nil
 }
 
 func decryptDumpFile(srcPath, dstPath, passphrase string) error {

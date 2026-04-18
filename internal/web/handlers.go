@@ -194,7 +194,7 @@ func (h *handlers) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobID, err := h.db.CreateJob()
+	jobID, err := h.db.CreateJobWithType("restore")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -297,7 +297,7 @@ func (h *handlers) handleRestoreFile(w http.ResponseWriter, r *http.Request, fil
 		return
 	}
 
-	jobID, err := h.db.CreateJob()
+	jobID, err := h.db.CreateJobWithType("restore")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

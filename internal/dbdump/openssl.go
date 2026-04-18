@@ -13,14 +13,14 @@ import (
 )
 
 const (
-	opensslSaltedPrefix = "Salted__"
+	OpenSSLSaltedPrefix = "Salted__"
 	opensslSaltBytes    = 8
 	pbkdf2Iterations    = 10000
 )
 
 // IsOpenSSLSaltedHeader reports whether a file header is OpenSSL "enc" salted format.
 func IsOpenSSLSaltedHeader(header []byte) bool {
-	return len(header) >= len(opensslSaltedPrefix) && string(header[:len(opensslSaltedPrefix)]) == opensslSaltedPrefix
+	return len(header) >= len(OpenSSLSaltedPrefix) && string(header[:len(OpenSSLSaltedPrefix)]) == OpenSSLSaltedPrefix
 }
 
 // EncryptOpenSSLAES256CBC encrypts src into OpenSSL-compatible salted output:
@@ -36,7 +36,7 @@ func EncryptOpenSSLAES256CBC(passphrase string, src io.Reader, dst io.Writer) er
 	}
 	key, iv := deriveKeyIV(passphrase, salt)
 
-	if _, err := dst.Write([]byte(opensslSaltedPrefix)); err != nil {
+	if _, err := dst.Write([]byte(OpenSSLSaltedPrefix)); err != nil {
 		return fmt.Errorf("write header: %w", err)
 	}
 	if _, err := dst.Write(salt); err != nil {
@@ -53,14 +53,14 @@ func EncryptOpenSSLAES256CBC(passphrase string, src io.Reader, dst io.Writer) er
 
 // DecryptOpenSSLAES256CBC decrypts OpenSSL-compatible salted AES-256-CBC input.
 func DecryptOpenSSLAES256CBC(passphrase string, src io.Reader, dst io.Writer) error {
-	header := make([]byte, len(opensslSaltedPrefix)+opensslSaltBytes)
+	header := make([]byte, len(OpenSSLSaltedPrefix)+opensslSaltBytes)
 	if _, err := io.ReadFull(src, header); err != nil {
 		return fmt.Errorf("read encrypted header: %w", err)
 	}
 	if !IsOpenSSLSaltedHeader(header) {
 		return fmt.Errorf("unsupported encrypted dump format")
 	}
-	salt := header[len(opensslSaltedPrefix):]
+	salt := header[len(OpenSSLSaltedPrefix):]
 	key, iv := deriveKeyIV(passphrase, salt)
 
 	block, err := aes.NewCipher(key)
@@ -102,9 +102,6 @@ func encryptCBCWithPKCS7(src io.Reader, dst io.Writer, mode cipher.BlockMode, bl
 	}
 
 	padLen := blockSize - (len(pending) % blockSize)
-	if padLen == 0 {
-		padLen = blockSize
-	}
 	padded := append(pending, bytes.Repeat([]byte{byte(padLen)}, padLen)...)
 	mode.CryptBlocks(padded, padded)
 	if _, err := dst.Write(padded); err != nil {

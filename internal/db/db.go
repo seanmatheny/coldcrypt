@@ -21,6 +21,7 @@ type DB struct {
 // Job represents a backup job record.
 type Job struct {
 	ID               int64
+	JobType          string
 	StartedAt        time.Time
 	CompletedAt      *time.Time
 	Status           string
@@ -94,6 +95,7 @@ CREATE TABLE IF NOT EXISTS file_versions (
 
 CREATE TABLE IF NOT EXISTS backup_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_type TEXT NOT NULL DEFAULT 'backup',
     started_at DATETIME NOT NULL,
     completed_at DATETIME,
     status TEXT NOT NULL DEFAULT 'running',
@@ -152,6 +154,12 @@ func New(dataDir string) (*DB, error) {
 		`ALTER TABLE files ADD COLUMN deleted_at DATETIME`); err != nil {
 		return nil, err
 	}
+	// Add job_type column to existing databases so backup and restore jobs can
+	// be distinguished in history.
+	if err := addColumnIfMissing(conn, "backup_jobs", "job_type",
+		`ALTER TABLE backup_jobs ADD COLUMN job_type TEXT NOT NULL DEFAULT 'backup'`); err != nil {
+		return nil, err
+	}
 	return &DB{conn: conn}, nil
 }
 
@@ -193,9 +201,17 @@ func addColumnIfMissing(conn *sql.DB, table, column, alterSQL string) error {
 
 // CreateJob creates a new backup job and returns its ID.
 func (d *DB) CreateJob() (int64, error) {
+	return d.CreateJobWithType("backup")
+}
+
+// CreateJobWithType creates a new job with the provided job type.
+func (d *DB) CreateJobWithType(jobType string) (int64, error) {
+	if strings.TrimSpace(jobType) == "" {
+		jobType = "backup"
+	}
 	res, err := d.conn.Exec(
-		`INSERT INTO backup_jobs (started_at, status) VALUES (?, 'running')`,
-		time.Now().UTC().Format(time.RFC3339),
+		`INSERT INTO backup_jobs (job_type, started_at, status) VALUES (?, ?, 'running')`,
+		jobType, time.Now().UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return 0, err
@@ -219,7 +235,7 @@ func (d *DB) UpdateJob(id int64, status string, filesProcessed int, bytesTransfe
 // ListJobs returns up to limit recent backup jobs ordered by start time descending.
 func (d *DB) ListJobs(limit int) ([]Job, error) {
 	rows, err := d.conn.Query(
-		`SELECT id, started_at, completed_at, status, files_processed, bytes_transferred, COALESCE(error_message,'') FROM backup_jobs ORDER BY started_at DESC LIMIT ?`,
+		`SELECT id, COALESCE(job_type,'backup'), started_at, completed_at, status, files_processed, bytes_transferred, COALESCE(error_message,'') FROM backup_jobs ORDER BY started_at DESC LIMIT ?`,
 		limit,
 	)
 	if err != nil {
@@ -232,7 +248,7 @@ func (d *DB) ListJobs(limit int) ([]Job, error) {
 // GetJob returns a single backup job by ID.
 func (d *DB) GetJob(id int64) (*Job, error) {
 	rows, err := d.conn.Query(
-		`SELECT id, started_at, completed_at, status, files_processed, bytes_transferred, COALESCE(error_message,'') FROM backup_jobs WHERE id=?`,
+		`SELECT id, COALESCE(job_type,'backup'), started_at, completed_at, status, files_processed, bytes_transferred, COALESCE(error_message,'') FROM backup_jobs WHERE id=?`,
 		id,
 	)
 	if err != nil {
@@ -255,7 +271,7 @@ func scanJobs(rows *sql.Rows) ([]Job, error) {
 		var j Job
 		var startedAtStr string
 		var completedAtStr sql.NullString
-		if err := rows.Scan(&j.ID, &startedAtStr, &completedAtStr, &j.Status, &j.FilesProcessed, &j.BytesTransferred, &j.ErrorMessage); err != nil {
+		if err := rows.Scan(&j.ID, &j.JobType, &startedAtStr, &completedAtStr, &j.Status, &j.FilesProcessed, &j.BytesTransferred, &j.ErrorMessage); err != nil {
 			return nil, err
 		}
 		t, _ := time.Parse(time.RFC3339, startedAtStr)
