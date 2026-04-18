@@ -120,9 +120,14 @@ func (s *Scheduler) runSchedule(scheduleID int64, name string, sourceDirs []stri
 
 	_ = s.db.UpdateScheduleLastRun(scheduleID)
 
+	dirs := sourceDirs
+	if len(dirs) == 0 {
+		dirs = s.cfg.SourceDirs
+	}
+
 	ctx := context.Background()
 	if err := s.agent.Run(ctx, agent.BackupOptions{
-		SourceDirs:     sourceDirs,
+		SourceDirs:     dirs,
 		ExcludePaths:   s.cfg.ExcludePaths,
 		ExcludeRegexes: s.cfg.ExcludeRegexes,
 		JobID:          jobID,
