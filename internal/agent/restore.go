@@ -53,9 +53,10 @@ func (a *Agent) RestoreFile(ctx context.Context, jobID, fileID int64, versionNum
 		log.Printf("restore file %d error: %v", fileID, err)
 		return 0, bytes, err
 	}
+	filesProcessed++
 	atomic.AddInt64(&a.restoreFilesProc, 1)
 	log.Printf("restored file %d -> %s", fileID, cleanPath)
-	return 1, bytes, nil
+	return filesProcessed, bytes, nil
 }
 
 // RestoreByPrefix downloads and decrypts all files whose display_path starts

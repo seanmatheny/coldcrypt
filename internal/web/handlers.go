@@ -194,7 +194,7 @@ func (h *handlers) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobID, err := h.db.CreateJobWithType("restore")
+	jobID, err := h.db.CreateJob()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -367,7 +367,7 @@ func (h *handlers) handleRestoreByPrefix(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	jobID, err := h.db.CreateJob()
+	jobID, err := h.db.CreateJobWithType("restore")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
