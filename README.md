@@ -151,10 +151,17 @@ coldcrypt purge [--config path] [--path <display-prefix>] [--yes]
     files whose display path starts with the given prefix are purged.
     Requires typing DELETE ALL at the confirmation prompt unless --yes is given.
 
-coldcrypt db-dump --out <file> [--config path]
+coldcrypt db-dump --out <file> [--config path] [--no-encrypt]
     Create a consistent copy of the SQLite database at the given path.
+    By default dumps are encrypted with OpenSSL-compatible AES-256-CBC using
+    the configured passphrase. Use --no-encrypt for plaintext output.
     Safe to run while the server is running (uses SQLite VACUUM INTO).
     Ideal for crontab-based database backups — see examples below.
+
+coldcrypt db-restore --from <file> [--config path] [--yes]
+    Restore a database dump to <data_dir>/coldcrypt.db.
+    Automatically handles both plaintext dumps and encrypted dumps created by
+    db-dump (using the configured passphrase).
 
 coldcrypt change-password [--config path]
     Interactively set the web UI password (uses bcrypt).
@@ -168,11 +175,24 @@ up independently of your encrypted blobs.
 
 The `db-dump` command creates a clean, consistent snapshot using SQLite's
 `VACUUM INTO` — it is safe to run while `coldcrypt serve` is running.
+Encrypted output is enabled by default.
 
 **Manual dump:**
 ```bash
 coldcrypt db-dump --config /etc/coldcrypt/config.json \
                   --out ~/coldcrypt-$(date +%Y%m%d).db
+```
+
+To create a plaintext dump instead:
+```bash
+coldcrypt db-dump --config /etc/coldcrypt/config.json \
+                  --out ~/coldcrypt-$(date +%Y%m%d).db --no-encrypt
+```
+
+Encrypted dumps are OpenSSL-compatible. You can decrypt them outside Coldcrypt:
+```bash
+openssl enc -d -aes-256-cbc -pbkdf2 -md sha256 \
+  -in coldcrypt-20260418.db -out coldcrypt-20260418.plain.db
 ```
 
 **Daily crontab entry** (runs at 03:00, keeps 30 days of dumps):
@@ -196,7 +216,7 @@ After signing in at `http(s)://localhost:8443`:
 
 - **Dashboard** — overview stats, recent jobs, "Run Backup Now" button
 - **Files** — searchable pseudo-filesystem browser; click "Versions" on any file to see its backup history and trigger a restore; click "Restore" on a directory to restore all its files; click "Purge" on a directory (or "Purge All" in the header) to permanently delete its backed-up blobs
-- **Jobs** — full backup job history with status badges (green=completed, yellow=running, red=failed); auto-refreshes for running jobs
+- **Jobs** — backup and restore job history with status badges (green=completed, yellow=running, red=failed); auto-refreshes for running jobs and shows active transfer progress
 - **Schedules** — add/edit/delete cron-based schedules; examples provided for common intervals
 - **Settings** — edit remote server config, source directories, and change the web UI password
 
