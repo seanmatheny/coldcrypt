@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <defs>
+    <radialGradient id="sg" cx="50%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#0e3060"/>
+      <stop offset="100%" stop-color="#05111f"/>
+    </radialGradient>
+    <linearGradient id="lg" x1="20%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8cd8f0"/>
+      <stop offset="100%" stop-color="#3a9ecf"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Ice crystal spires -->
+  <polygon points="100,4 93,36 107,36" fill="#b5e8f8" stroke="#2c8fd4" stroke-width="1.5"/>
+  <polygon points="79,12 73,37 85,37" fill="#8dd4ec" stroke="#2c8fd4" stroke-width="1.2"/>
+  <polygon points="121,12 115,37 127,37" fill="#8dd4ec" stroke="#2c8fd4" stroke-width="1.2"/>
+  <polygon points="61,21 56,40 66,40" fill="#60bedd" stroke="#2c8fd4" stroke-width="1.2"/>
+  <polygon points="139,21 134,40 144,40" fill="#60bedd" stroke="#2c8fd4" stroke-width="1.2"/>
+
+  <!-- Shield body -->
+  <path d="M100,192 C60,173 22,147 22,112 L22,56 Q22,36 42,36 L158,36 Q178,36 178,56 L178,112 C178,147 140,173 100,192 Z"
+        fill="url(#sg)" stroke="#2c8fd4" stroke-width="5"/>
+
+  <!-- Arch interior (dark tunnel/void) -->
+  <path d="M63,140 L63,108 C63,62 137,62 137,108 L137,140 Z" fill="#050f1c"/>
+
+  <!-- Arch border (ice blocks) -->
+  <path d="M63,140 L63,108 C63,62 137,62 137,108 L137,140"
+        fill="none" stroke="#50b8d8" stroke-width="7"
+        stroke-dasharray="17,5" stroke-linecap="butt"/>
+  <!-- Arch inner edge highlight -->
+  <path d="M63,140 L63,108 C63,62 137,62 137,108 L137,140"
+        fill="none" stroke="#aee0f5" stroke-width="1.5"
+        stroke-dasharray="17,5"/>
+
+  <!-- Snowflake (inside shield, above padlock) -->
+  <g transform="translate(100,68)">
+    <line x1="0.00" y1="0.00" x2="0.00" y2="-12.00" stroke="#c5edfb" stroke-width="2" stroke-linecap="round"/>
+    <line x1="-3.50" y1="-7.50" x2="3.50" y2="-7.50" stroke="#c5edfb" stroke-width="1.3" stroke-linecap="round"/>
+    <line x1="0.00" y1="0.00" x2="10.39" y2="-6.00" stroke="#c5edfb" stroke-width="2" stroke-linecap="round"/>
+    <line x1="4.75" y1="-6.78" x2="8.25" y2="-0.72" stroke="#c5edfb" stroke-width="1.3" stroke-linecap="round"/>
+    <line x1="0.00" y1="0.00" x2="10.39" y2="6.00" stroke="#c5edfb" stroke-width="2" stroke-linecap="round"/>
+    <line x1="8.25" y1="0.72" x2="4.75" y2="6.78" stroke="#c5edfb" stroke-width="1.3" stroke-linecap="round"/>
+    <line x1="0.00" y1="0.00" x2="0.00" y2="12.00" stroke="#c5edfb" stroke-width="2" stroke-linecap="round"/>
+    <line x1="3.50" y1="7.50" x2="-3.50" y2="7.50" stroke="#c5edfb" stroke-width="1.3" stroke-linecap="round"/>
+    <line x1="0.00" y1="0.00" x2="-10.39" y2="6.00" stroke="#c5edfb" stroke-width="2" stroke-linecap="round"/>
+    <line x1="-4.75" y1="6.78" x2="-8.25" y2="0.72" stroke="#c5edfb" stroke-width="1.3" stroke-linecap="round"/>
+    <line x1="0.00" y1="0.00" x2="-10.39" y2="-6.00" stroke="#c5edfb" stroke-width="2" stroke-linecap="round"/>
+    <line x1="-8.25" y1="-0.72" x2="-4.75" y2="-6.78" stroke="#c5edfb" stroke-width="1.3" stroke-linecap="round"/>
+    <circle cx="0" cy="0" r="2" fill="#c5edfb"/>
+  </g>
+
+  <!-- Padlock shackle -->
+  <path d="M84,120 L84,108 Q84,95 100,95 Q116,95 116,108 L116,120"
+        fill="none" stroke="url(#lg)" stroke-width="7" stroke-linecap="round"/>
+  <!-- Padlock body -->
+  <rect x="75" y="117" width="50" height="40" rx="6" fill="url(#lg)" stroke="#1a6898" stroke-width="2"/>
+  <!-- Padlock shine -->
+  <rect x="79" y="120" width="17" height="12" rx="4" fill="rgba(255,255,255,0.15)"/>
+  <!-- Keyhole -->
+  <circle cx="100" cy="132" r="5" fill="#050f1c"/>
+  <rect x="97.5" y="132" width="5" height="9" rx="1.5" fill="#050f1c"/>
+</svg>
