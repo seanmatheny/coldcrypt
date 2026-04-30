@@ -27,13 +27,14 @@ const sessionCookie = "coldcrypt_session"
 const maxBodyBytes = 1 << 20
 
 type handlers struct {
-	cfg      *config.Config
-	cfgPath  string
-	db       *db.DB
-	agent    *agent.Agent
-	sched    *scheduler.Scheduler
-	sessions *SessionStore
-	tlsMode  bool // whether server is running with TLS
+	cfg            *config.Config
+	cfgPath        string
+	secretsCfgPath string
+	db             *db.DB
+	agent          *agent.Agent
+	sched          *scheduler.Scheduler
+	sessions       *SessionStore
+	tlsMode        bool // whether server is running with TLS
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -140,7 +141,11 @@ func (h *handlers) handleChangePassword(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	h.cfg.WebPasswordHash = string(hash)
-	if err := config.Save(h.cfg, h.cfgPath); err != nil {
+	savePath := h.secretsCfgPath
+	if savePath == "" {
+		savePath = h.cfgPath
+	}
+	if err := config.SaveSecrets(h.cfg, savePath); err != nil {
 		writeError(w, http.StatusInternalServerError, "save config error")
 		return
 	}
@@ -482,11 +487,6 @@ func (h *handlers) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"source_dirs":               h.cfg.SourceDirs,
 		"exclude_paths":             h.cfg.ExcludePaths,
 		"exclude_regexes":           h.cfg.ExcludeRegexes,
-		"web_port":                  h.cfg.WebPort,
-		"data_dir":                  h.cfg.DataDir,
-		"web_tls_cert":              h.cfg.WebTLSCert,
-		"web_tls_key":               h.cfg.WebTLSKey,
-		"ntfy_topic":                h.cfg.NtfyTopic,
 		"deleted_retention_enabled": h.cfg.DeletedRetentionEnabled,
 		"deleted_retention_value":   h.cfg.DeletedRetentionValue,
 		"deleted_retention_unit":    h.cfg.DeletedRetentionUnit,
@@ -507,10 +507,6 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		SourceDirs              []string `json:"source_dirs"`
 		ExcludePaths            []string `json:"exclude_paths"`
 		ExcludeRegexes          []string `json:"exclude_regexes"`
-		WebPort                 int      `json:"web_port"`
-		WebTLSCert              string   `json:"web_tls_cert"`
-		WebTLSKey               string   `json:"web_tls_key"`
-		NtfyTopic               string   `json:"ntfy_topic"`
 		DeletedRetentionEnabled bool     `json:"deleted_retention_enabled"`
 		DeletedRetentionValue   int      `json:"deleted_retention_value"`
 		DeletedRetentionUnit    string   `json:"deleted_retention_unit"`
@@ -546,17 +542,6 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if body.ExcludeRegexes != nil {
 		h.cfg.ExcludeRegexes = body.ExcludeRegexes
 	}
-	if body.WebPort != 0 {
-		h.cfg.WebPort = body.WebPort
-	}
-	if body.WebTLSCert != "" {
-		h.cfg.WebTLSCert = body.WebTLSCert
-	}
-	if body.WebTLSKey != "" {
-		h.cfg.WebTLSKey = body.WebTLSKey
-	}
-	// NtfyTopic is assigned unconditionally so users can clear it by saving an empty string.
-	h.cfg.NtfyTopic = body.NtfyTopic
 	h.cfg.DeletedRetentionEnabled = body.DeletedRetentionEnabled
 	if body.DeletedRetentionValue >= 0 {
 		h.cfg.DeletedRetentionValue = body.DeletedRetentionValue
@@ -564,7 +549,20 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if body.DeletedRetentionUnit != "" {
 		h.cfg.DeletedRetentionUnit = body.DeletedRetentionUnit
 	}
-	if err := config.Save(h.cfg, h.cfgPath); err != nil {
+
+	// On the first UI save after migrating from a single-file config, create
+	// secrets.json so that infrastructure fields are not lost when config.json
+	// is rewritten without them.
+	secretsPath := h.secretsCfgPath
+	if secretsPath == "" {
+		secretsPath = h.cfgPath
+	}
+	if err := config.EnsureSecretsFile(h.cfg, secretsPath); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("create secrets config: %v", err))
+		return
+	}
+
+	if err := config.SaveUI(h.cfg, h.cfgPath); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("save config: %v", err))
 		return
 	}

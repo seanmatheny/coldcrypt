@@ -73,12 +73,12 @@ func printUsage() {
 
 Usage:
   coldcrypt init <data-dir>             Initialize a new data directory
-  coldcrypt serve [--config path]       Start web server and scheduler
-  coldcrypt backup [--config path] [dirs...]  Run a one-off backup
-  coldcrypt purge [--config path] [--path <display-prefix>]  Permanently delete backed-up blobs
-  coldcrypt db-dump [--config path] --out <file> [--no-encrypt]  Dump a copy of the database
-  coldcrypt db-restore [--config path] --from <file>  Restore a database dump (plain or encrypted)
-  coldcrypt change-password [--config path]   Change the web UI password
+  coldcrypt serve [--config path] [--secrets-config path]       Start web server and scheduler
+  coldcrypt backup [--config path] [--secrets-config path] [dirs...]  Run a one-off backup
+  coldcrypt purge [--config path] [--secrets-config path] [--path <display-prefix>]  Permanently delete backed-up blobs
+  coldcrypt db-dump [--config path] [--secrets-config path] --out <file> [--no-encrypt]  Dump a copy of the database
+  coldcrypt db-restore [--config path] [--secrets-config path] --from <file>  Restore a database dump (plain or encrypted)
+  coldcrypt change-password [--config path] [--secrets-config path]   Change the web UI password
 `)
 }
 
@@ -114,29 +114,38 @@ func cmdInit(args []string) {
 	}
 
 	cfgPath := config.DefaultConfigPath(dataDir)
-	if err := config.Save(cfg, cfgPath); err != nil {
+	secretsPath := config.DefaultSecretsPath(cfgPath)
+
+	if err := config.SaveUI(cfg, cfgPath); err != nil {
 		log.Fatalf("write config: %v", err)
+	}
+	if err := config.SaveSecrets(cfg, secretsPath); err != nil {
+		log.Fatalf("write secrets: %v", err)
 	}
 
 	fmt.Printf(`Coldcrypt initialized!
 
 Data directory : %s
 Config file    : %s
+Secrets file   : %s
 
 Next steps:
-  1. Edit %s:
+  1. Edit %s (UI-editable settings):
      - Set remote_host, remote_user, remote_key_path
      - Set source_dirs to the directories you want to back up
+
+  2. Edit %s (infrastructure/puppet-managed settings):
      - Replace the passphrase with a strong one (or use passphrase_file)
      - Optionally configure web_tls_cert/web_tls_key for HTTPS
+     - Optionally configure web_port (default 8443)
 
-  2. Set the web UI password:
+  3. Set the web UI password:
        coldcrypt change-password --config %s
 
-  3. Start the server:
+  4. Start the server:
        coldcrypt serve --config %s
 
-`, dataDir, cfgPath, cfgPath, cfgPath, cfgPath)
+`, dataDir, cfgPath, secretsPath, cfgPath, secretsPath, cfgPath, cfgPath)
 }
 
 // ── serve ──────────────────────────────────────────────────────────────────
@@ -144,12 +153,13 @@ Next steps:
 func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.json")
+	secretsCfgPath := fs.String("secrets-config", "", "path to secrets.json (default: same directory as config.json)")
 	_ = fs.Parse(args)
 
 	closeLog := setupLogging()
 	defer closeLog()
 
-	cfg, resolvedPath := loadConfig(*cfgPath)
+	cfg, resolvedPath, secretsPath := loadCombinedConfig(*cfgPath, *secretsCfgPath)
 
 	database, err := db.New(cfg.DataDir)
 	if err != nil {
@@ -168,7 +178,7 @@ func cmdServe(args []string) {
 	}
 	defer sched.Stop()
 
-	srv := web.New(cfg, resolvedPath, database, a, sched)
+	srv := web.New(cfg, resolvedPath, secretsPath, database, a, sched)
 	log.Printf("Starting Coldcrypt server on port %d", cfg.WebPort)
 	if err := srv.Start(); err != nil {
 		log.Fatalf("server error: %v", err)
@@ -180,13 +190,14 @@ func cmdServe(args []string) {
 func cmdBackup(args []string) {
 	fs := flag.NewFlagSet("backup", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.json")
+	secretsCfgPath := fs.String("secrets-config", "", "path to secrets.json (default: same directory as config.json)")
 	_ = fs.Parse(args)
 
 	closeLog := setupLogging()
 	defer closeLog()
 
 	dirs := fs.Args()
-	cfg, _ := loadConfig(*cfgPath)
+	cfg, _, _ := loadCombinedConfig(*cfgPath, *secretsCfgPath)
 
 	database, err := db.New(cfg.DataDir)
 	if err != nil {
@@ -229,6 +240,7 @@ func cmdBackup(args []string) {
 func cmdPurge(args []string) {
 	fs := flag.NewFlagSet("purge", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.json")
+	secretsCfgPath := fs.String("secrets-config", "", "path to secrets.json (default: same directory as config.json)")
 	yes := fs.Bool("yes", false, "skip confirmation prompt")
 	purgePath := fs.String("path", "", "purge only files under this display path prefix (omit to purge everything)")
 	_ = fs.Parse(args)
@@ -236,7 +248,7 @@ func cmdPurge(args []string) {
 	closeLog := setupLogging()
 	defer closeLog()
 
-	cfg, _ := loadConfig(*cfgPath)
+	cfg, _, _ := loadCombinedConfig(*cfgPath, *secretsCfgPath)
 
 	if !*yes {
 		if *purgePath != "" {
@@ -287,6 +299,7 @@ func cmdPurge(args []string) {
 func cmdDBDump(args []string) {
 	fs := flag.NewFlagSet("db-dump", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.json")
+	secretsCfgPath := fs.String("secrets-config", "", "path to secrets.json (default: same directory as config.json)")
 	outPath := fs.String("out", "", "destination file for the database copy (required)")
 	noEncrypt := fs.Bool("no-encrypt", false, "write plaintext dump output")
 	_ = fs.Parse(args)
@@ -297,7 +310,7 @@ func cmdDBDump(args []string) {
 	}
 	useEncryption := !*noEncrypt
 
-	cfg, _ := loadConfig(*cfgPath)
+	cfg, _, _ := loadCombinedConfig(*cfgPath, *secretsCfgPath)
 
 	database, err := db.New(cfg.DataDir)
 	if err != nil {
@@ -356,6 +369,7 @@ func cmdDBDump(args []string) {
 func cmdDBRestore(args []string) {
 	fs := flag.NewFlagSet("db-restore", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.json")
+	secretsCfgPath := fs.String("secrets-config", "", "path to secrets.json (default: same directory as config.json)")
 	fromPath := fs.String("from", "", "path to the database dump to restore (required)")
 	yes := fs.Bool("yes", false, "skip confirmation prompt")
 	_ = fs.Parse(args)
@@ -369,7 +383,7 @@ func cmdDBRestore(args []string) {
 		log.Fatalf("dump file not found: %v", err)
 	}
 
-	cfg, _ := loadConfig(*cfgPath)
+	cfg, _, _ := loadCombinedConfig(*cfgPath, *secretsCfgPath)
 	destPath := filepath.Join(cfg.DataDir, "coldcrypt.db")
 	restorePath := *fromPath
 
@@ -479,9 +493,10 @@ func copyFile(src, dst string) error {
 func cmdChangePassword(args []string) {
 	fs := flag.NewFlagSet("change-password", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.json")
+	secretsCfgPath := fs.String("secrets-config", "", "path to secrets.json (default: same directory as config.json)")
 	_ = fs.Parse(args)
 
-	cfg, resolvedPath := loadConfig(*cfgPath)
+	cfg, _, secretsPath := loadCombinedConfig(*cfgPath, *secretsCfgPath)
 
 	password := promptPassword("New web UI password: ")
 	confirm := promptPassword("Confirm password: ")
@@ -501,16 +516,18 @@ func cmdChangePassword(args []string) {
 	}
 
 	cfg.WebPasswordHash = string(hash)
-	if err := config.Save(cfg, resolvedPath); err != nil {
-		log.Fatalf("save config: %v", err)
+	if err := config.SaveSecrets(cfg, secretsPath); err != nil {
+		log.Fatalf("save secrets: %v", err)
 	}
 	fmt.Println("Password updated successfully.")
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-// loadConfig loads config from the given path or searches standard locations.
-func loadConfig(cfgPath string) (*config.Config, string) {
+// loadCombinedConfig loads config.json and, if present, secrets.json (or the
+// path given by secretsCfgPath). Returns the merged Config, the resolved
+// config.json path, and the resolved secrets.json path.
+func loadCombinedConfig(cfgPath, secretsCfgPath string) (*config.Config, string, string) {
 	if cfgPath == "" {
 		// Try a few standard locations
 		candidates := []string{
@@ -532,11 +549,22 @@ func loadConfig(cfgPath string) (*config.Config, string) {
 	if err != nil {
 		absPath = cfgPath
 	}
-	cfg, err := config.Load(absPath)
+	if secretsCfgPath == "" {
+		secretsCfgPath = config.DefaultSecretsPath(absPath)
+	} else {
+		sp, err := filepath.Abs(secretsCfgPath)
+		if err == nil {
+			secretsCfgPath = sp
+		}
+	}
+	if _, err := os.Stat(secretsCfgPath); os.IsNotExist(err) {
+		log.Printf("note: secrets config %s not found; infrastructure fields will be read from config.json", secretsCfgPath)
+	}
+	cfg, err := config.LoadCombined(absPath, secretsCfgPath)
 	if err != nil {
 		log.Fatalf("load config %s: %v", absPath, err)
 	}
-	return cfg, absPath
+	return cfg, absPath, secretsCfgPath
 }
 
 // stdinReader is a shared buffered reader for non-terminal stdin input.

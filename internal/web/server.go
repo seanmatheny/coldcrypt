@@ -18,21 +18,23 @@ var staticFS embed.FS
 
 // Server is the Coldcrypt web server.
 type Server struct {
-	cfg     *config.Config
-	cfgPath string
-	db      *db.DB
-	agent   *agent.Agent
-	sched   *scheduler.Scheduler
+	cfg            *config.Config
+	cfgPath        string
+	secretsCfgPath string
+	db             *db.DB
+	agent          *agent.Agent
+	sched          *scheduler.Scheduler
 }
 
 // New creates a new web Server.
-func New(cfg *config.Config, cfgPath string, database *db.DB, a *agent.Agent, sched *scheduler.Scheduler) *Server {
+func New(cfg *config.Config, cfgPath string, secretsCfgPath string, database *db.DB, a *agent.Agent, sched *scheduler.Scheduler) *Server {
 	return &Server{
-		cfg:     cfg,
-		cfgPath: cfgPath,
-		db:      database,
-		agent:   a,
-		sched:   sched,
+		cfg:            cfg,
+		cfgPath:        cfgPath,
+		secretsCfgPath: secretsCfgPath,
+		db:             database,
+		agent:          a,
+		sched:          sched,
 	}
 }
 
@@ -41,13 +43,14 @@ func (s *Server) Start() error {
 	mux := http.NewServeMux()
 
 	h := &handlers{
-		cfg:      s.cfg,
-		cfgPath:  s.cfgPath,
-		db:       s.db,
-		agent:    s.agent,
-		sched:    s.sched,
-		sessions: NewSessionStore(),
-		tlsMode:  s.cfg.WebTLSCert != "" && s.cfg.WebTLSKey != "",
+		cfg:            s.cfg,
+		cfgPath:        s.cfgPath,
+		secretsCfgPath: s.secretsCfgPath,
+		db:             s.db,
+		agent:          s.agent,
+		sched:          s.sched,
+		sessions:       NewSessionStore(),
+		tlsMode:        s.cfg.WebTLSCert != "" && s.cfg.WebTLSKey != "",
 	}
 	h.registerRoutes(mux)
 

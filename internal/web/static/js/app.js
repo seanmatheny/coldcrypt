@@ -10,9 +10,6 @@ let restoreDisplayPrefix = null;
 let purgeDisplayPrefix = null;
 let jobRefreshTimer = null;
 let activeJobTimer = null;
-let serverDataDir = '';  // populated after login; used as default restore path
-
-// Rate-graph state
 let rateSamples = [];       // [{t: number, bytes: number}]
 let lastActiveJobId = null;
 const RATE_WINDOW_MS = 15000;
@@ -58,10 +55,6 @@ function showLogin() {
 function showApp() {
   document.getElementById('login-page').style.display = 'none';
   document.getElementById('app').classList.remove('d-none');
-  // Cache the server's data directory so restore modals can suggest a writable default path.
-  fetch('/api/config').then(r => r.ok ? r.json() : null).then(cfg => {
-    if (cfg && cfg.data_dir) serverDataDir = cfg.data_dir;
-  }).catch(() => {});
   navigateTo('dashboard');
 }
 
@@ -173,7 +166,6 @@ function bindGlobal() {
   // Settings save / password change
   document.getElementById('cfg-save-btn').addEventListener('click', saveConfig);
   document.getElementById('cfg-pwd-btn').addEventListener('click', changePassword);
-  document.getElementById('cfg-ntfy-test-btn').addEventListener('click', testNotification);
   document.getElementById('cfg-del-retain-enabled').addEventListener('change', toggleDeletedRetentionFields);
 }
 
@@ -888,7 +880,6 @@ async function loadSettings() {
   document.getElementById('cfg-source-dirs').value = (cfg.source_dirs || []).join('\n');
   document.getElementById('cfg-exclude-paths').value = (cfg.exclude_paths || []).join('\n');
   document.getElementById('cfg-exclude-regexes').value = (cfg.exclude_regexes || []).join('\n');
-  document.getElementById('cfg-ntfy-topic').value  = cfg.ntfy_topic || '';
   document.getElementById('cfg-del-retain-enabled').checked = !!cfg.deleted_retention_enabled;
   document.getElementById('cfg-del-retain-value').value = cfg.deleted_retention_value || 14;
   document.getElementById('cfg-del-retain-unit').value = cfg.deleted_retention_unit || 'days';
@@ -905,7 +896,6 @@ async function saveConfig() {
     source_dirs:      document.getElementById('cfg-source-dirs').value.split('\n').map(s => s.trim()).filter(Boolean),
     exclude_paths:    document.getElementById('cfg-exclude-paths').value.split('\n').map(s => s.trim()).filter(Boolean),
     exclude_regexes:  document.getElementById('cfg-exclude-regexes').value.split('\n').map(s => s.trim()).filter(Boolean),
-    ntfy_topic:       document.getElementById('cfg-ntfy-topic').value.trim(),
     deleted_retention_enabled: document.getElementById('cfg-del-retain-enabled').checked,
     deleted_retention_value: Math.max(0, parseInt(document.getElementById('cfg-del-retain-value').value, 10) || 0),
     deleted_retention_unit: document.getElementById('cfg-del-retain-unit').value
@@ -940,16 +930,6 @@ async function changePassword() {
   } else {
     const d = await r.json().catch(() => ({ error: 'Change failed' }));
     showMsg('pwd-msg', d.error || 'Change failed', 'danger');
-  }
-}
-
-async function testNotification() {
-  const r = await fetch('/api/notify/test', { method: 'POST' });
-  if (r.ok) {
-    showMsg('ntfy-msg', 'Test notification sent successfully.', 'success');
-  } else {
-    const d = await r.json().catch(() => ({ error: 'Send failed' }));
-    showMsg('ntfy-msg', d.error || 'Send failed', 'danger');
   }
 }
 
