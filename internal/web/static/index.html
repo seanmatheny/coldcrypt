@@ -260,24 +260,24 @@
 
     .tree-actions { margin-left: auto; flex-shrink: 0; }
 
-    /* Graveyard scene strip on login card */
-    .graveyard-scene {
-      font-size: 1.6rem;
-      letter-spacing: 0.15rem;
-      line-height: 1;
+    /* Login page logo */
+    .login-logo {
+      width: 180px;
+      height: auto;
       margin-bottom: 0.25rem;
-      user-select: none;
     }
 
-    /* Sidebar brand themed icons */
-    .brand-icons { letter-spacing: 0.1rem; }
+    /* Sidebar brand logo */
+    .sidebar-logo {
+      width: 140px;
+      height: auto;
+      display: block;
+    }
 
-    /* Topbar icy accent */
-    .topbar-frost {
-      font-size: 0.8rem;
-      color: #4e8fbf;
-      opacity: 0.55;
-      user-select: none;
+    /* Topbar logo icon */
+    .topbar-logo {
+      height: 28px;
+      width: auto;
     }
 
     /* Rate graph canvas */
@@ -305,9 +305,7 @@
 <div id="login-page">
   <div class="login-card">
     <div class="text-center mb-4">
-      <div class="graveyard-scene">🦇 🪦 💀 🪦 🦇</div>
-      <div style="font-size:2.5rem;">❄️🔒❄️</div>
-      <h4 class="mt-2 fw-bold" style="color:#58a6ff;">Coldcrypt</h4>
+      <img src="/static/img/logo.svg" class="login-logo" alt="Coldcrypt" />
       <p class="text-muted small">Encrypted Backup Manager</p>
     </div>
     <div id="login-error" class="alert alert-danger d-none small py-2"></div>
@@ -328,7 +326,7 @@
 
   <!-- Sidebar -->
   <nav class="sidebar">
-    <div class="sidebar-brand"><span class="brand-icons">❄️💀❄️</span> Coldcrypt</div>
+    <div class="sidebar-brand"><img src="/static/img/logo.svg" class="sidebar-logo" alt="Coldcrypt" /></div>
     <div class="sidebar-nav">
       <a class="nav-item-link active" data-section="dashboard">
         <i class="fa fa-gauge-high"></i> Dashboard
@@ -353,7 +351,7 @@
     <!-- Topbar -->
     <div class="topbar">
       <span class="topbar-title" id="topbar-section-name">Dashboard</span>
-      <span class="topbar-frost">❄️ 💀 ❄️</span>
+      <img src="/static/img/logo-icon.svg" class="topbar-logo" alt="" />
       <button class="btn btn-sm btn-outline-secondary" id="logout-btn">
         <i class="fa fa-sign-out-alt me-1"></i>Logout
       </button>
