@@ -97,7 +97,7 @@ function navigateTo(section) {
     el.classList.toggle('active', el.id === `section-${section}`);
   });
   const names = {
-    dashboard: 'Dashboard', files: 'Files', jobs: 'Backup Jobs',
+    dashboard: 'Dashboard', files: 'Files', jobs: 'Jobs',
     schedules: 'Schedules', settings: 'Settings'
   };
   document.getElementById('topbar-section-name').textContent = names[section] || section;
@@ -525,7 +525,7 @@ async function loadJobs() {
   const tbody = document.getElementById('jobs-tbody');
   tbody.innerHTML = '';
   if (jobs.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="7" class="text-muted text-center py-3">No jobs yet</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="text-muted text-center py-3">No jobs yet</td></tr>';
     return;
   }
   jobs.forEach(job => {
@@ -537,6 +537,7 @@ function jobRow(job) {
   return `<tr>
     <td class="text-muted small">#${job.ID}</td>
     <td>${statusBadge(job.Status)}</td>
+    <td>${jobTypeBadge(job.JobType)}</td>
     <td class="small">${fmtDate(job.StartedAt)}</td>
     <td class="small">${job.FilesProcessed}</td>
     <td class="small">${fmtSize(job.BytesTransferred)}</td>
@@ -547,12 +548,20 @@ function jobRowFull(job) {
   return `<tr>
     <td class="text-muted small">#${job.ID}</td>
     <td>${statusBadge(job.Status)}</td>
+    <td>${jobTypeBadge(job.JobType)}</td>
     <td class="small">${fmtDate(job.StartedAt)}</td>
     <td class="small">${job.CompletedAt ? fmtDate(job.CompletedAt) : '—'}</td>
     <td class="small">${job.FilesProcessed}</td>
     <td class="small">${fmtSize(job.BytesTransferred)}</td>
     <td class="small text-danger">${esc(job.ErrorMessage || '')}</td>
   </tr>`;
+}
+
+function jobTypeBadge(type) {
+  if (type === 'restore') {
+    return '<span class="badge bg-info text-dark">restore</span>';
+  }
+  return '<span class="badge bg-primary">backup</span>';
 }
 
 function statusBadge(status) {
