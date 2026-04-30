@@ -41,7 +41,7 @@ coldcrypt/
 
 ### How encryption works
 
-1. On first `init`, a random 32-byte salt is generated and stored in `config.json` (base64).
+1. On first `init`, a random 32-byte salt is generated and stored in `secrets.json` (base64).
 2. At startup, `Argon2id(passphrase, salt)` derives a 32-byte AES key — **the key never leaves the process**.
 3. Each file is encrypted with `AES-256-GCM`:
    - A fresh 12-byte nonce is generated per file per backup.
@@ -79,17 +79,22 @@ go build ./cmd/coldcrypt/
 ./coldcrypt init ~/.coldcrypt
 ```
 
-This creates `~/.coldcrypt/config.json` with a pre-generated key salt and template values.
+This creates two files:
+- `~/.coldcrypt/config.json` — UI-editable settings (remote server, source directories, retention policy)
+- `~/.coldcrypt/secrets.json` — infrastructure/puppet-managed settings (passphrase, key salt, web port, TLS, ntfy topic)
 
-### 2. Edit the config
+### 2. Edit the config files
 
 ```bash
-$EDITOR ~/.coldcrypt/config.json
+$EDITOR ~/.coldcrypt/config.json    # UI-editable settings
+$EDITOR ~/.coldcrypt/secrets.json   # infrastructure settings
 ```
 
-At minimum set:
+At minimum set in **config.json**:
 - `remote_host`, `remote_user`, `remote_key_path`
 - `source_dirs` — list of directories to back up
+
+At minimum set in **secrets.json**:
 - `passphrase` — replace the placeholder with a strong passphrase (or use `passphrase_file`)
 - `data_dir` — should match the directory you initialized
 
@@ -98,6 +103,8 @@ At minimum set:
 ```bash
 ./coldcrypt change-password --config ~/.coldcrypt/config.json
 ```
+
+This updates `web_password_hash` in `secrets.json` (the file is created automatically if it does not exist yet).
 
 ### 4. Start the server
 
@@ -110,6 +117,13 @@ At minimum set:
 
 ## Configuration Reference
 
+Coldcrypt uses two JSON files in the same directory:
+
+### `config.json` — UI-editable settings
+
+These fields are read and written by the web UI Settings page. Puppet should
+not manage this file if users will also change settings through the web UI.
+
 | Key | Default | Description |
 |-----|---------|-------------|
 | `remote_host` | — | SCP server hostname/IP |
@@ -121,50 +135,75 @@ At minimum set:
 | `source_dirs` | `[]` | Directories to back up |
 | `exclude_paths` | `[]` | Absolute paths to exclude (and their descendants) |
 | `exclude_regexes` | `[]` | Regular expressions matched against source paths to exclude files/directories |
+| `deleted_retention_enabled` | `false` | Retain files deleted at source before automatic purge |
+| `deleted_retention_value` | `0` | Retention duration value |
+| `deleted_retention_unit` | `"days"` | Retention duration unit (`"days"` or `"weeks"`) |
+
+### `secrets.json` — infrastructure/puppet-managed settings
+
+These fields are **never read or written by the web UI** and are safe to manage
+with configuration management tools (Puppet, Ansible, etc.) without risk of
+overwriting backup targets or other UI settings.
+
+| Key | Default | Description |
+|-----|---------|-------------|
 | `passphrase` | — | Encryption passphrase (inline) |
 | `passphrase_file` | — | Path to file containing passphrase |
 | `web_port` | `8443` | Web UI port |
-| `web_password_hash` | — | bcrypt hash of web UI password |
+| `web_password_hash` | — | bcrypt hash of web UI password (set via `change-password`) |
 | `web_tls_cert` | — | Path to TLS certificate (enables HTTPS) |
 | `web_tls_key` | — | Path to TLS private key |
-| `data_dir` | — | Directory for SQLite DB and config |
+| `data_dir` | — | Directory for SQLite DB |
 | `key_salt` | — | Base64 Argon2id salt (auto-generated on init) |
+| `ntfy_topic` | — | ntfy.sh topic for failure push notifications |
+
+#### Backward compatibility
+
+Existing single-file `config.json` installations continue to work without
+change. Infrastructure fields are read from `config.json` if `secrets.json`
+does not exist, and `secrets.json` is created automatically the first time the
+web UI saves settings or the `change-password` command is run. At that point
+the two-file layout takes effect going forward.
 
 ---
 
 ## CLI Commands
 
+All commands accept an optional `--secrets-config <path>` flag. If omitted,
+`secrets.json` is looked for in the same directory as `config.json`.
+
 ```
 coldcrypt init <data-dir>
-    Create data directory, generate key salt, write template config.
+    Create data directory, generate key salt, write config.json and secrets.json.
 
-coldcrypt serve [--config path]
+coldcrypt serve [--config path] [--secrets-config path]
     Start the web server and cron scheduler.
     Searches for config.json in: ./config.json, ~/.coldcrypt/config.json, /etc/coldcrypt/config.json
 
-coldcrypt backup [--config path] [dir1 dir2 ...]
+coldcrypt backup [--config path] [--secrets-config path] [dir1 dir2 ...]
     Run a one-off backup. Uses source_dirs from config if no dirs specified.
 
-coldcrypt purge [--config path] [--path <display-prefix>] [--yes]
+coldcrypt purge [--config path] [--secrets-config path] [--path <display-prefix>] [--yes]
     Permanently delete backed-up blobs from the remote server and clear matching
     database records. Without --path, ALL backups are purged. With --path, only
     files whose display path starts with the given prefix are purged.
     Requires typing DELETE ALL at the confirmation prompt unless --yes is given.
 
-coldcrypt db-dump --out <file> [--config path] [--no-encrypt]
+coldcrypt db-dump --out <file> [--config path] [--secrets-config path] [--no-encrypt]
     Create a consistent copy of the SQLite database at the given path.
     By default dumps are encrypted with OpenSSL-compatible AES-256-CBC using
     the configured passphrase. Use --no-encrypt for plaintext output.
     Safe to run while the server is running (uses SQLite VACUUM INTO).
     Ideal for crontab-based database backups — see examples below.
 
-coldcrypt db-restore --from <file> [--config path] [--yes]
+coldcrypt db-restore --from <file> [--config path] [--secrets-config path] [--yes]
     Restore a database dump to <data_dir>/coldcrypt.db.
     Automatically handles both plaintext dumps and encrypted dumps created by
     db-dump (using the configured passphrase).
 
-coldcrypt change-password [--config path]
+coldcrypt change-password [--config path] [--secrets-config path]
     Interactively set the web UI password (uses bcrypt).
+    Updates web_password_hash in secrets.json.
 ```
 
 ### Database backups
@@ -246,7 +285,9 @@ sudo useradd --system --no-create-home --shell /usr/sbin/nologin coldcrypt
 sudo mkdir -p /etc/coldcrypt
 sudo coldcrypt init /var/lib/coldcrypt
 sudo cp /var/lib/coldcrypt/config.json /etc/coldcrypt/config.json
-# Edit /etc/coldcrypt/config.json — set data_dir to /var/lib/coldcrypt
+sudo cp /var/lib/coldcrypt/secrets.json /etc/coldcrypt/secrets.json
+# Edit /etc/coldcrypt/config.json — set remote_host, remote_user, source_dirs, etc.
+# Edit /etc/coldcrypt/secrets.json — set data_dir to /var/lib/coldcrypt, passphrase, etc.
 sudo chown -R coldcrypt:coldcrypt /etc/coldcrypt
 sudo chmod 700 /etc/coldcrypt
 ```
@@ -304,7 +345,7 @@ sudo tail -f /var/log/coldcrypt/coldcrypt.log
 - **Argon2id parameters**: time=1, memory=64 MiB, threads=4, output=32 bytes. These are conservative; increase `time` for higher security at the cost of startup latency.
 - **AES-256-GCM** provides both confidentiality and integrity. Any tampering with a blob will cause decryption to fail.
 - **No keys on remote**: the SCP server stores only opaque UUID-named blobs. Compromise of the remote server does not expose plaintext.
-- **Passphrase security**: use a long, random passphrase. Store it in a `passphrase_file` with mode `0600` rather than inline in `config.json`.
+- **Passphrase security**: use a long, random passphrase. Store it in a `passphrase_file` with mode `0600` rather than inline in `secrets.json`.
 - **TLS**: configure `web_tls_cert`/`web_tls_key` to enable HTTPS for the web UI.
 - **Sessions**: web UI sessions expire after 24 hours and use 32-byte cryptographically random IDs.
 - The SSH `HostKeyCallback` is set to `InsecureIgnoreHostKey` — for production use, replace with a known-hosts-based callback.

@@ -11,7 +11,7 @@ User=coldcrypt
 Group=coldcrypt
 
 # Adjust these paths to match your installation.
-ExecStart=/usr/local/bin/coldcrypt serve --config /etc/coldcrypt/config.json
+ExecStart=/usr/local/bin/coldcrypt serve --config /etc/coldcrypt/config.json --secrets-config /etc/coldcrypt/secrets.json
 
 Restart=on-failure
 RestartSec=10
