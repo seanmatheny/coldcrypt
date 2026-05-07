@@ -59,6 +59,13 @@ type FileVersion struct {
 	JobID       int64
 }
 
+// JobFileEntry is a summary of one file processed by a backup job.
+type JobFileEntry struct {
+	DisplayPath string
+	Size        int64
+	EncryptedAt time.Time
+}
+
 // Schedule represents a scheduled backup.
 type Schedule struct {
 	ID         int64
@@ -944,6 +951,35 @@ func (d *DB) ListBlobIDsByFileIDs(fileIDs []int64) ([]string, error) {
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// ListFilesByJobID returns all files processed by the given backup job,
+// ordered by display_path. Only backup jobs record per-file version rows;
+// restore jobs will return an empty slice.
+func (d *DB) ListFilesByJobID(jobID int64) ([]JobFileEntry, error) {
+	rows, err := d.conn.Query(
+		`SELECT f.display_path, fv.size, fv.encrypted_at
+		 FROM file_versions fv
+		 JOIN files f ON f.id = fv.file_id
+		 WHERE fv.job_id = ?
+		 ORDER BY f.display_path`,
+		jobID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var entries []JobFileEntry
+	for rows.Next() {
+		var e JobFileEntry
+		var encStr string
+		if err := rows.Scan(&e.DisplayPath, &e.Size, &encStr); err != nil {
+			return nil, err
+		}
+		e.EncryptedAt, _ = time.Parse(time.RFC3339, encStr)
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
 }
 
 // DeleteFilesByIDs removes file/version rows for the provided file IDs.

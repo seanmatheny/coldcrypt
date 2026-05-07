@@ -18,7 +18,7 @@ const RATE_WINDOW_MS = 15000;
 const expandedDirs = new Set();
 
 // ── Bootstrap modal handles ────────────────────────────────────────────────
-let versionsModal, restoreModal, scheduleModal, purgeModal;
+let versionsModal, restoreModal, scheduleModal, purgeModal, jobFilesModal;
 
 // ── Init ───────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -26,6 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
   restoreModal   = new bootstrap.Modal(document.getElementById('restoreModal'));
   scheduleModal  = new bootstrap.Modal(document.getElementById('scheduleModal'));
   purgeModal     = new bootstrap.Modal(document.getElementById('purgeModal'));
+  jobFilesModal  = new bootstrap.Modal(document.getElementById('jobFilesModal'));
 
   bindNav();
   bindGlobal();
@@ -107,7 +108,7 @@ function navigateTo(section) {
   switch (section) {
     case 'dashboard': loadDashboard(); startActiveJobPolling(); break;
     case 'files':     loadFiles(); break;
-    case 'jobs':      loadJobs(); startJobRefresh(); startActiveJobPolling(); break;
+    case 'jobs':      loadJobs(); loadStorage(); startJobRefresh(); startActiveJobPolling(); break;
     case 'schedules': loadSchedules(); break;
     case 'settings':  loadSettings(); break;
   }
@@ -554,6 +555,7 @@ function jobRowFull(job) {
     <td class="small">${job.FilesProcessed}</td>
     <td class="small">${fmtSize(job.BytesTransferred)}</td>
     <td class="small text-danger">${esc(job.ErrorMessage || '')}</td>
+    <td class="small"><button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="openJobFiles(${job.ID})" title="View files transferred"><i class="fa fa-list"></i></button></td>
   </tr>`;
 }
 
@@ -581,6 +583,82 @@ function startJobRefresh() {
 
 function stopJobRefresh() {
   if (jobRefreshTimer) { clearInterval(jobRefreshTimer); jobRefreshTimer = null; }
+}
+
+// Opens a modal showing all files processed by a specific job.
+async function openJobFiles(jobID) {
+  document.getElementById('job-files-id').textContent = jobID;
+  document.getElementById('job-files-body').innerHTML =
+    '<div class="text-center text-muted py-4"><i class="fa fa-spinner fa-spin me-2"></i>Loading…</div>';
+  document.getElementById('job-files-count').textContent = '';
+  jobFilesModal.show();
+
+  const files = await apiFetch(`/api/jobs/${jobID}/files`);
+  if (!files) {
+    document.getElementById('job-files-body').innerHTML =
+      '<div class="text-muted text-center py-3">Failed to load files.</div>';
+    return;
+  }
+  if (files.length === 0) {
+    document.getElementById('job-files-body').innerHTML =
+      '<div class="text-muted text-center py-3">No file-level detail is recorded for this job. ' +
+      '(File tracking is only available for backup jobs.)</div>';
+    return;
+  }
+
+  document.getElementById('job-files-count').textContent = `${files.length.toLocaleString()} file(s)`;
+
+  let html = `<table class="table table-dark table-sm mb-0" style="font-size:0.82rem;">
+    <thead><tr>
+      <th>File</th>
+      <th class="text-end" style="white-space:nowrap;">Size</th>
+      <th class="text-end" style="white-space:nowrap;">Processed At</th>
+    </tr></thead><tbody>`;
+  for (const f of files) {
+    html += `<tr>
+      <td style="word-break:break-all;font-family:monospace;font-size:0.78rem;">${esc(f.DisplayPath)}</td>
+      <td class="text-end text-muted" style="white-space:nowrap;">${fmtSize(f.Size)}</td>
+      <td class="text-end text-muted" style="white-space:nowrap;">${fmtDate(f.EncryptedAt)}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  document.getElementById('job-files-body').innerHTML = html;
+}
+
+// Loads remote storage utilisation and renders the gauge card in the Jobs section.
+async function loadStorage() {
+  const card = document.getElementById('storage-gauge-card');
+  if (!card) return;
+  const data = await apiFetch('/api/storage');
+  if (!data) {
+    // Not configured or unreachable — keep the card hidden.
+    card.classList.add('d-none');
+    return;
+  }
+  card.classList.remove('d-none');
+
+  const pctUsed = data.percent_used || 0;
+  const pctFree = data.percent_free != null ? data.percent_free : (100 - pctUsed);
+
+  // Colour thresholds: green ≥ 30 % free, orange 10–29 %, red 0–9 %.
+  // The red/notification boundary (9 %) must stay in sync with
+  // storageLowPctThreshold in internal/web/handlers.go.
+  let colour;
+  if (pctFree >= 30) colour = '#238636';       // green
+  else if (pctFree >= 10) colour = '#d29922';  // orange
+  else colour = '#da3633';                      // red
+
+  const bar = document.getElementById('storage-bar');
+  bar.style.width = pctUsed + '%';
+  bar.style.backgroundColor = colour;
+  bar.setAttribute('aria-valuenow', pctUsed);
+
+  const freeStr  = fmtSize((data.free_kb  || 0) * 1024);
+  const totalStr = fmtSize((data.total_kb || 0) * 1024);
+  document.getElementById('storage-detail').textContent =
+    `${freeStr} free of ${totalStr} (${pctFree}% free)`;
+  document.getElementById('storage-mount').textContent =
+    `${data.filesystem || ''} → mounted at ${data.mount_point || ''}`;
 }
 
 // ── Active job polling ─────────────────────────────────────────────────────

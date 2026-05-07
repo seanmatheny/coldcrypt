@@ -33,6 +33,16 @@ func SendPartialFailure(topic string, jobID int64, errCount int) {
 	send(topic, "Coldcrypt Backup Warning", msg, "warning")
 }
 
+// SendLowStorage sends a critical storage alert when the backup destination
+// volume is nearly full (0–9 % free). If topic is empty, it does nothing.
+func SendLowStorage(topic string, percentFree int) {
+	if topic == "" {
+		return
+	}
+	msg := fmt.Sprintf("Remote backup storage is critically low: only %d%% free. Please free up space on the backup destination.", percentFree)
+	send(topic, "Coldcrypt Storage Alert", msg, "warning,exclamation")
+}
+
 // SendTest sends a test notification to the configured ntfy.sh topic.
 // Returns an error if the request fails or the topic is empty.
 func SendTest(topic string) error {

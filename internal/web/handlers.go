@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -19,12 +20,18 @@ import (
 	"github.com/seanmatheny/coldcrypt/internal/db"
 	"github.com/seanmatheny/coldcrypt/internal/notify"
 	"github.com/seanmatheny/coldcrypt/internal/scheduler"
+	"github.com/seanmatheny/coldcrypt/internal/transfer"
 )
 
 const sessionCookie = "coldcrypt_session"
 
 // maxBodyBytes limits request bodies to 1 MiB to prevent DoS.
 const maxBodyBytes = 1 << 20
+
+// storageLowPctThreshold is the free-space percentage at or below which a
+// push notification is sent and the storage gauge turns red in the UI.
+// Keep in sync with the frontend colour thresholds in app.js (loadStorage).
+const storageLowPctThreshold = 9
 
 type handlers struct {
 	cfg            *config.Config
@@ -35,6 +42,10 @@ type handlers struct {
 	sched          *scheduler.Scheduler
 	sessions       *SessionStore
 	tlsMode        bool // whether server is running with TLS
+
+	// Rate-limit storage-low notifications to at most one per hour.
+	storageLowMu         sync.Mutex
+	lastStorageLowNotify time.Time
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -173,6 +184,75 @@ func (h *handlers) handleGetJob(w http.ResponseWriter, r *http.Request, id int64
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
+}
+
+// GET /api/jobs/:id/files — returns the list of files processed by a backup job.
+func (h *handlers) handleListJobFiles(w http.ResponseWriter, r *http.Request, id int64) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	entries, err := h.db.ListFilesByJobID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if entries == nil {
+		entries = []db.JobFileEntry{}
+	}
+	writeJSON(w, http.StatusOK, entries)
+}
+
+// GET /api/storage — queries the remote backup volume for disk usage and
+// returns utilisation details. Sends a push notification when free space
+// drops to 9 % or below (rate-limited to one notification per hour).
+func (h *handlers) handleGetStorage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if h.cfg.RemoteHost == "" {
+		writeError(w, http.StatusServiceUnavailable, "remote host not configured")
+		return
+	}
+	client, err := transfer.NewClient(
+		h.cfg.RemoteHost, h.cfg.RemotePort,
+		h.cfg.RemoteUser, h.cfg.RemoteKeyPath, h.cfg.RemotePassword,
+	)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("ssh connect: %v", err))
+		return
+	}
+	defer client.Close()
+
+	info, err := client.DiskUsage(h.cfg.RemoteBasePath)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("disk usage: %v", err))
+		return
+	}
+
+	// Send a notification when the backup volume is critically low (0–9 % free),
+	// but no more than once per hour to avoid flooding the ntfy topic.
+	if info.PercentFree <= storageLowPctThreshold {
+		h.storageLowMu.Lock()
+		if time.Since(h.lastStorageLowNotify) >= time.Hour {
+			h.lastStorageLowNotify = time.Now()
+			h.storageLowMu.Unlock()
+			notify.SendLowStorage(h.cfg.NtfyTopic, info.PercentFree)
+		} else {
+			h.storageLowMu.Unlock()
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"filesystem":   info.Filesystem,
+		"total_kb":     info.TotalKB,
+		"used_kb":      info.UsedKB,
+		"free_kb":      info.FreeKB,
+		"percent_used": info.PercentUsed,
+		"percent_free": info.PercentFree,
+		"mount_point":  info.MountPoint,
+	})
 }
 
 // POST /api/jobs
@@ -734,6 +814,16 @@ func (h *handlers) registerRoutes(mux *http.ServeMux) {
 		}
 	}))
 	mux.HandleFunc("/api/jobs/", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		// /api/jobs/:id/files — list files processed by a job
+		if strings.HasSuffix(r.URL.Path, "/files") {
+			id, ok := parseIDFromPath(r.URL.Path, "/api/jobs/", "/files")
+			if !ok {
+				writeError(w, http.StatusBadRequest, "invalid job id")
+				return
+			}
+			h.handleListJobFiles(w, r, id)
+			return
+		}
 		id, ok := parseIDFromPath(r.URL.Path, "/api/jobs/", "")
 		if !ok {
 			writeError(w, http.StatusBadRequest, "invalid job id")
@@ -857,4 +947,7 @@ func (h *handlers) registerRoutes(mux *http.ServeMux) {
 		}
 		h.handlePurge(w, r)
 	}))
+
+	// Remote storage utilisation
+	mux.HandleFunc("/api/storage", h.requireAuth(h.handleGetStorage))
 }

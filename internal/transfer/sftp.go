@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -215,4 +216,79 @@ func (c *Client) DownloadBlob(remotePath, blobID string) (io.ReadCloser, error) 
 // EnsureDir creates remote directories recursively if they don't exist.
 func (c *Client) EnsureDir(path string) error {
 	return c.sftp.MkdirAll(path)
+}
+
+// runCommand runs a command on the remote host and returns its combined stdout.
+// stderr is not captured; the command must succeed (exit 0) or an error is returned.
+func (c *Client) runCommand(cmd string) (string, error) {
+	sess, err := c.sshConn.NewSession()
+	if err != nil {
+		return "", fmt.Errorf("ssh new session: %w", err)
+	}
+	defer sess.Close()
+	out, err := sess.Output(cmd)
+	if err != nil {
+		return "", fmt.Errorf("ssh exec %q: %w", cmd, err)
+	}
+	return string(out), nil
+}
+
+// DiskUsageInfo holds the result of a remote df query.
+type DiskUsageInfo struct {
+	Filesystem  string
+	TotalKB     int64
+	UsedKB      int64
+	FreeKB      int64
+	PercentUsed int
+	PercentFree int
+	MountPoint  string
+}
+
+// DiskUsage queries the remote filesystem that contains path using `df -P`
+// and returns utilisation details. The POSIX `-P` flag guarantees a stable
+// single-line-per-filesystem output format independent of the remote locale.
+func (c *Client) DiskUsage(path string) (DiskUsageInfo, error) {
+	out, err := c.runCommand("df -P " + shellQuote(path))
+	if err != nil {
+		return DiskUsageInfo{}, err
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	// First line is the header; second line is the data.
+	if len(lines) < 2 {
+		return DiskUsageInfo{}, fmt.Errorf("unexpected df output: %q", out)
+	}
+	fields := strings.Fields(lines[1])
+	if len(fields) < 6 {
+		return DiskUsageInfo{}, fmt.Errorf("unexpected df fields in line %q", lines[1])
+	}
+	total, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil {
+		return DiskUsageInfo{}, fmt.Errorf("df parse total %q: %w", fields[1], err)
+	}
+	used, err := strconv.ParseInt(fields[2], 10, 64)
+	if err != nil {
+		return DiskUsageInfo{}, fmt.Errorf("df parse used %q: %w", fields[2], err)
+	}
+	free, err := strconv.ParseInt(fields[3], 10, 64)
+	if err != nil {
+		return DiskUsageInfo{}, fmt.Errorf("df parse free %q: %w", fields[3], err)
+	}
+	// Capacity field is like "49%"; strip the percent sign.
+	pctUsed, err := strconv.Atoi(strings.TrimSuffix(fields[4], "%"))
+	if err != nil {
+		return DiskUsageInfo{}, fmt.Errorf("df parse capacity %q: %w", fields[4], err)
+	}
+	pctFree := 100 - pctUsed
+	if pctFree < 0 {
+		pctFree = 0
+	}
+	return DiskUsageInfo{
+		Filesystem:  fields[0],
+		TotalKB:     total,
+		UsedKB:      used,
+		FreeKB:      free,
+		PercentUsed: pctUsed,
+		PercentFree: pctFree,
+		MountPoint:  fields[5],
+	}, nil
 }
