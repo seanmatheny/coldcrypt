@@ -497,11 +497,23 @@
           <canvas id="rate-graph"></canvas>
         </div>
 
+        <!-- Remote storage gauge -->
+        <div id="storage-gauge-card" class="stat-card mb-3 d-none">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <span class="fw-semibold small"><i class="fa fa-hard-drive me-1"></i>Remote Storage</span>
+            <span id="storage-detail" class="small text-muted"></span>
+          </div>
+          <div class="progress mb-1" style="height:14px;border-radius:4px;background:#21262d;">
+            <div id="storage-bar" class="progress-bar" role="progressbar" style="width:0%;transition:width 0.4s ease;"></div>
+          </div>
+          <div id="storage-mount" class="small text-muted mt-1"></div>
+        </div>
+
         <div class="table-dark-custom">
           <table class="table table-dark mb-0">
             <thead>
               <tr>
-                <th>ID</th><th>Status</th><th>Type</th><th>Started</th><th>Completed</th><th>Files</th><th>Transferred</th><th>Error</th>
+                <th>ID</th><th>Status</th><th>Type</th><th>Started</th><th>Completed</th><th>Files</th><th>Transferred</th><th>Error</th><th></th>
               </tr>
             </thead>
             <tbody id="jobs-tbody"></tbody>
@@ -719,6 +731,24 @@
         <button type="button" class="btn btn-danger btn-sm" id="purge-confirm-btn">
           <i class="fa fa-trash me-1"></i>Purge
         </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Job Files Modal -->
+<div class="modal fade" id="jobFilesModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content" style="background:#161b22;border:1px solid #30363d;">
+      <div class="modal-header border-0">
+        <h5 class="modal-title">Files for Job #<span id="job-files-id"></span></h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0" id="job-files-body">
+        <div class="text-center text-muted py-4">Loading…</div>
+      </div>
+      <div class="modal-footer border-0 justify-content-start">
+        <span id="job-files-count" class="small text-muted"></span>
       </div>
     </div>
   </div>
