@@ -45,6 +45,17 @@ async function init() {
   } catch {
     showLogin();
   }
+  loadVersion();
+}
+
+async function loadVersion() {
+  try {
+    const r = await fetch('/api/version');
+    if (!r.ok) return;
+    const d = await r.json();
+    const v = d.version || '';
+    document.getElementById('login-version').textContent = v ? `v${v}` : '';
+  } catch { /* ignore */ }
 }
 
 // ── Auth ───────────────────────────────────────────────────────────────────
@@ -106,9 +117,9 @@ function navigateTo(section) {
   stopJobRefresh();
   stopActiveJobPolling();
   switch (section) {
-    case 'dashboard': loadDashboard(); startActiveJobPolling(); break;
+    case 'dashboard': loadDashboard(); loadStorage(); startActiveJobPolling(); break;
     case 'files':     loadFiles(); break;
-    case 'jobs':      loadJobs(); loadStorage(); startJobRefresh(); startActiveJobPolling(); break;
+    case 'jobs':      loadJobs(); startJobRefresh(); startActiveJobPolling(); break;
     case 'schedules': loadSchedules(); break;
     case 'settings':  loadSettings(); break;
   }
@@ -971,6 +982,15 @@ async function loadSettings() {
   document.getElementById('cfg-del-retain-value').value = cfg.deleted_retention_value || 14;
   document.getElementById('cfg-del-retain-unit').value = cfg.deleted_retention_unit || 'days';
   toggleDeletedRetentionFields();
+
+  try {
+    const r = await fetch('/api/version');
+    if (r.ok) {
+      const d = await r.json();
+      const v = d.version || '';
+      document.getElementById('settings-version').textContent = v || '—';
+    }
+  } catch { /* ignore */ }
 }
 
 async function saveConfig() {
