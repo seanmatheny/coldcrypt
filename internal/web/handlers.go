@@ -42,6 +42,7 @@ type handlers struct {
 	sched          *scheduler.Scheduler
 	sessions       *SessionStore
 	tlsMode        bool // whether server is running with TLS
+	version        string
 
 	// Rate-limit storage-low notifications to at most one per hour.
 	storageLowMu         sync.Mutex
@@ -795,6 +796,9 @@ func parseIDFromPath(path, prefix, suffix string) (int64, bool) {
 
 // registerRoutes wires all API handlers onto the provided mux.
 func (h *handlers) registerRoutes(mux *http.ServeMux) {
+	// Version (unauthenticated – needed by login page)
+	mux.HandleFunc("/api/version", securityHeaders(h.handleGetVersion))
+
 	// Auth
 	mux.HandleFunc("/api/auth/login", securityHeaders(h.handleLogin))
 	mux.HandleFunc("/api/auth/logout", h.requireAuth(h.handleLogout))
@@ -950,4 +954,13 @@ func (h *handlers) registerRoutes(mux *http.ServeMux) {
 
 	// Remote storage utilisation
 	mux.HandleFunc("/api/storage", h.requireAuth(h.handleGetStorage))
+}
+
+// GET /api/version
+func (h *handlers) handleGetVersion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"version": h.version})
 }

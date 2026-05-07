@@ -24,10 +24,11 @@ type Server struct {
 	db             *db.DB
 	agent          *agent.Agent
 	sched          *scheduler.Scheduler
+	version        string
 }
 
 // New creates a new web Server.
-func New(cfg *config.Config, cfgPath string, secretsCfgPath string, database *db.DB, a *agent.Agent, sched *scheduler.Scheduler) *Server {
+func New(cfg *config.Config, cfgPath string, secretsCfgPath string, database *db.DB, a *agent.Agent, sched *scheduler.Scheduler, version string) *Server {
 	return &Server{
 		cfg:            cfg,
 		cfgPath:        cfgPath,
@@ -35,6 +36,7 @@ func New(cfg *config.Config, cfgPath string, secretsCfgPath string, database *db
 		db:             database,
 		agent:          a,
 		sched:          sched,
+		version:        version,
 	}
 }
 
@@ -51,6 +53,7 @@ func (s *Server) Start() error {
 		sched:          s.sched,
 		sessions:       NewSessionStore(),
 		tlsMode:        s.cfg.WebTLSCert != "" && s.cfg.WebTLSKey != "",
+		version:        s.version,
 	}
 	h.registerRoutes(mux)
 

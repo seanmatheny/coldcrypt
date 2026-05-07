@@ -25,6 +25,10 @@ import (
 	"context"
 )
 
+// Version is set at build time via -ldflags "-X main.Version=<version>".
+// It defaults to "dev" when not set.
+var Version = "dev"
+
 // setupLogging configures the standard logger to write to both stderr and a log
 // file. If the log file cannot be opened, only stderr is used.
 // The returned function should be called with defer to close the file.
@@ -178,7 +182,7 @@ func cmdServe(args []string) {
 	}
 	defer sched.Stop()
 
-	srv := web.New(cfg, resolvedPath, secretsPath, database, a, sched)
+	srv := web.New(cfg, resolvedPath, secretsPath, database, a, sched, Version)
 	log.Printf("Starting Coldcrypt server on port %d", cfg.WebPort)
 	if err := srv.Start(); err != nil {
 		log.Fatalf("server error: %v", err)
