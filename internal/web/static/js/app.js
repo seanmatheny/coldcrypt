@@ -54,7 +54,8 @@ async function loadVersion() {
     if (!r.ok) return;
     const d = await r.json();
     const v = d.version || '';
-    document.getElementById('login-version').textContent = v ? `v${v}` : '';
+    const el = document.getElementById('login-version');
+    if (el) el.textContent = v || '—';
   } catch { /* ignore */ }
 }
 
