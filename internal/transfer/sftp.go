@@ -261,11 +261,23 @@ func (c *Client) DiskUsage(path string) (DiskUsageInfo, error) {
 	if len(fields) < 6 {
 		return DiskUsageInfo{}, fmt.Errorf("unexpected df fields in line %q", lines[1])
 	}
-	total, _ := strconv.ParseInt(fields[1], 10, 64)
-	used, _ := strconv.ParseInt(fields[2], 10, 64)
-	free, _ := strconv.ParseInt(fields[3], 10, 64)
+	total, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil {
+		return DiskUsageInfo{}, fmt.Errorf("df parse total %q: %w", fields[1], err)
+	}
+	used, err := strconv.ParseInt(fields[2], 10, 64)
+	if err != nil {
+		return DiskUsageInfo{}, fmt.Errorf("df parse used %q: %w", fields[2], err)
+	}
+	free, err := strconv.ParseInt(fields[3], 10, 64)
+	if err != nil {
+		return DiskUsageInfo{}, fmt.Errorf("df parse free %q: %w", fields[3], err)
+	}
 	// Capacity field is like "49%"; strip the percent sign.
-	pctUsed, _ := strconv.Atoi(strings.TrimSuffix(fields[4], "%"))
+	pctUsed, err := strconv.Atoi(strings.TrimSuffix(fields[4], "%"))
+	if err != nil {
+		return DiskUsageInfo{}, fmt.Errorf("df parse capacity %q: %w", fields[4], err)
+	}
 	pctFree := 100 - pctUsed
 	if pctFree < 0 {
 		pctFree = 0

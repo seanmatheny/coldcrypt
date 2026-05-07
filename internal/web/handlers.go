@@ -28,6 +28,11 @@ const sessionCookie = "coldcrypt_session"
 // maxBodyBytes limits request bodies to 1 MiB to prevent DoS.
 const maxBodyBytes = 1 << 20
 
+// storageLowPctThreshold is the free-space percentage at or below which a
+// push notification is sent and the storage gauge turns red in the UI.
+// Keep in sync with the frontend colour thresholds in app.js (loadStorage).
+const storageLowPctThreshold = 9
+
 type handlers struct {
 	cfg            *config.Config
 	cfgPath        string
@@ -228,7 +233,7 @@ func (h *handlers) handleGetStorage(w http.ResponseWriter, r *http.Request) {
 
 	// Send a notification when the backup volume is critically low (0–9 % free),
 	// but no more than once per hour to avoid flooding the ntfy topic.
-	if info.PercentFree <= 9 {
+	if info.PercentFree <= storageLowPctThreshold {
 		h.storageLowMu.Lock()
 		if time.Since(h.lastStorageLowNotify) >= time.Hour {
 			h.lastStorageLowNotify = time.Now()

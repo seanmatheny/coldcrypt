@@ -641,6 +641,8 @@ async function loadStorage() {
   const pctFree = data.percent_free != null ? data.percent_free : (100 - pctUsed);
 
   // Colour thresholds: green ≥ 30 % free, orange 10–29 %, red 0–9 %.
+  // The red/notification boundary (9 %) must stay in sync with
+  // storageLowPctThreshold in internal/web/handlers.go.
   let colour;
   if (pctFree >= 30) colour = '#238636';       // green
   else if (pctFree >= 10) colour = '#d29922';  // orange
