@@ -3,12 +3,14 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 
@@ -21,13 +23,29 @@ import (
 	"github.com/seanmatheny/coldcrypt/internal/dbdump"
 	"github.com/seanmatheny/coldcrypt/internal/scheduler"
 	"github.com/seanmatheny/coldcrypt/internal/web"
-
-	"context"
 )
 
 // Version is set at build time via -ldflags "-X main.Version=<version>".
-// It defaults to "dev" when not set.
+// It defaults to "dev" when not set; at runtime the embedded VCS commit hash
+// is used as a fallback so the binary always reports a meaningful identifier.
 var Version = "dev"
+
+// resolvedVersion returns the build-time Version if it was set via ldflags,
+// otherwise it falls back to the short VCS commit hash embedded by the Go
+// toolchain (available since Go 1.18).
+func resolvedVersion() string {
+	if Version != "dev" {
+		return Version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range info.Settings {
+			if s.Key == "vcs.revision" && len(s.Value) >= 7 {
+				return s.Value[:7]
+			}
+		}
+	}
+	return Version
+}
 
 // setupLogging configures the standard logger to write to both stderr and a log
 // file. If the log file cannot be opened, only stderr is used.
@@ -182,7 +200,7 @@ func cmdServe(args []string) {
 	}
 	defer sched.Stop()
 
-	srv := web.New(cfg, resolvedPath, secretsPath, database, a, sched, Version)
+	srv := web.New(cfg, resolvedPath, secretsPath, database, a, sched, resolvedVersion())
 	log.Printf("Starting Coldcrypt server on port %d", cfg.WebPort)
 	if err := srv.Start(); err != nil {
 		log.Fatalf("server error: %v", err)
