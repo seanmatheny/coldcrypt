@@ -274,9 +274,6 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 			}
 			defer workerClient.Close()
 			for item := range workCh {
-				a.mu.Lock()
-				a.currentFile = item.path
-				a.mu.Unlock()
 				n, b, hadErr := a.processFile(ctx, workerClient, opts, item.path, item.srcDir)
 				mu.Lock()
 				if n > 0 {
@@ -513,6 +510,10 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 	}
 
 	// Content changed; encrypt and upload.
+	a.mu.Lock()
+	a.currentFile = path
+	a.mu.Unlock()
+
 	f, err := os.Open(path)
 	if err != nil {
 		log.Printf("open error %s: %v", path, err)
