@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"compress/gzip"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -18,8 +19,14 @@ import (
 // Peak memory per file during backup is roughly 2 × encryptChunkSize.
 const encryptChunkSize = 32 * 1024 * 1024
 
-// fileMagic is the 4-byte header that identifies the chunked-encryption format.
+// fileMagic is the 4-byte header that identifies the chunked-encryption format
+// (uncompressed plaintext).
 var fileMagic = []byte("CCBK")
+
+// fileMagicCompressed is the 4-byte header for the compressed+encrypted format.
+// Plaintext is gzip-compressed before being fed into the chunked encryption
+// layer, allowing transparent decompression on restore.
+var fileMagicCompressed = []byte("CCZK")
 
 // DeriveKey derives a 32-byte AES key from passphrase and salt using Argon2id.
 func DeriveKey(passphrase string, salt []byte) []byte {
@@ -28,7 +35,7 @@ func DeriveKey(passphrase string, salt []byte) []byte {
 
 // EncryptFile encrypts src in fixed-size chunks and writes to dst.
 //
-// On-disk format (v2 chunked):
+// On-disk format (v2 chunked, magic "CCBK"):
 //
 //	[4-byte magic "CCBK"]
 //	[4-byte little-endian plaintext chunk size]
@@ -39,6 +46,36 @@ func DeriveKey(passphrase string, salt []byte) []byte {
 //
 // Peak memory per file is ~2 × encryptChunkSize regardless of file size.
 func EncryptFile(key []byte, src io.Reader, dst io.Writer) error {
+	return encryptFileWithMagic(fileMagic, key, src, dst)
+}
+
+// CompressAndEncryptFile gzip-compresses src and then encrypts it using the
+// same chunked AES-256-GCM scheme as EncryptFile, writing a "CCZK"-magic blob
+// to dst.  DecryptFile detects the magic automatically and decompresses on
+// restore, so existing uncompressed ("CCBK") blobs remain fully compatible.
+func CompressAndEncryptFile(key []byte, src io.Reader, dst io.Writer) error {
+	pr, pw := io.Pipe()
+	compErrCh := make(chan error, 1)
+	go func() {
+		gz := gzip.NewWriter(pw)
+		_, err := io.Copy(gz, src)
+		if err == nil {
+			err = gz.Close()
+		}
+		pw.CloseWithError(err)
+		compErrCh <- err
+	}()
+	encErr := encryptFileWithMagic(fileMagicCompressed, key, pr, dst)
+	compErr := <-compErrCh
+	if encErr != nil {
+		return encErr
+	}
+	return compErr
+}
+
+// encryptFileWithMagic is the shared implementation used by EncryptFile and
+// CompressAndEncryptFile. magic must be exactly 4 bytes.
+func encryptFileWithMagic(magic, key []byte, src io.Reader, dst io.Writer) error {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return fmt.Errorf("new cipher: %w", err)
@@ -49,7 +86,7 @@ func EncryptFile(key []byte, src io.Reader, dst io.Writer) error {
 	}
 
 	// Write magic and plaintext chunk size.
-	if _, err := dst.Write(fileMagic); err != nil {
+	if _, err := dst.Write(magic); err != nil {
 		return fmt.Errorf("write magic: %w", err)
 	}
 	var chunkHdr [4]byte
@@ -95,20 +132,24 @@ func EncryptFile(key []byte, src io.Reader, dst io.Writer) error {
 	return nil
 }
 
-// DecryptFile decrypts a chunked blob written by EncryptFile and writes
-// plaintext to dst.
+// DecryptFile decrypts a chunked blob written by EncryptFile or
+// CompressAndEncryptFile and writes plaintext to dst. The format is detected
+// automatically via the 4-byte magic header: "CCBK" blobs are decrypted
+// directly; "CCZK" blobs are decrypted and then gzip-decompressed.
 func DecryptFile(key []byte, src io.Reader, dst io.Writer) error {
 	// Consume and verify the magic header.
 	var header [4]byte
 	if _, err := io.ReadFull(src, header[:]); err != nil {
 		return fmt.Errorf("read header: %w", err)
 	}
-	for i, b := range fileMagic {
-		if header[i] != b {
-			return fmt.Errorf("unrecognised blob format")
-		}
+	switch {
+	case header == [4]byte(fileMagic):
+		return decryptChunked(key, src, dst)
+	case header == [4]byte(fileMagicCompressed):
+		return decryptChunkedDecompress(key, src, dst)
+	default:
+		return fmt.Errorf("unrecognised blob format")
 	}
-	return decryptChunked(key, src, dst)
 }
 
 // decryptChunked decrypts a chunked blob. src is positioned just after the
@@ -165,6 +206,35 @@ func decryptChunked(key []byte, src io.Reader, dst io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// decryptChunkedDecompress decrypts a "CCZK" blob (src positioned just after
+// the 4-byte magic) and gzip-decompresses the resulting plaintext into dst.
+func decryptChunkedDecompress(key []byte, src io.Reader, dst io.Writer) error {
+	pr, pw := io.Pipe()
+	decErrCh := make(chan error, 1)
+	go func() {
+		err := decryptChunked(key, src, pw)
+		pw.CloseWithError(err)
+		decErrCh <- err
+	}()
+
+	gz, err := gzip.NewReader(pr)
+	if err != nil {
+		pr.CloseWithError(err)
+		<-decErrCh
+		return fmt.Errorf("gzip reader: %w", err)
+	}
+	_, copyErr := io.Copy(dst, gz)
+	gz.Close()
+	// Drain the pipe so the decryption goroutine can finish.
+	pr.CloseWithError(copyErr)
+	decErr := <-decErrCh
+
+	if copyErr != nil {
+		return fmt.Errorf("decompress: %w", copyErr)
+	}
+	return decErr
 }
 
 // HashFile computes SHA256 hash of a file and returns it as a hex string.

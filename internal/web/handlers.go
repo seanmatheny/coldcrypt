@@ -571,6 +571,7 @@ func (h *handlers) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"deleted_retention_enabled": h.cfg.DeletedRetentionEnabled,
 		"deleted_retention_value":   h.cfg.DeletedRetentionValue,
 		"deleted_retention_unit":    h.cfg.DeletedRetentionUnit,
+		"compression_enabled":       h.cfg.CompressionEnabled,
 	}
 	writeJSON(w, http.StatusOK, sanitized)
 }
@@ -591,6 +592,7 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		DeletedRetentionEnabled bool     `json:"deleted_retention_enabled"`
 		DeletedRetentionValue   int      `json:"deleted_retention_value"`
 		DeletedRetentionUnit    string   `json:"deleted_retention_unit"`
+		CompressionEnabled      bool     `json:"compression_enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -630,6 +632,7 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if body.DeletedRetentionUnit != "" {
 		h.cfg.DeletedRetentionUnit = body.DeletedRetentionUnit
 	}
+	h.cfg.CompressionEnabled = body.CompressionEnabled
 
 	// On the first UI save after migrating from a single-file config, create
 	// secrets.json so that infrastructure fields are not lost when config.json

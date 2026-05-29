@@ -30,6 +30,11 @@ type Config struct {
 	DeletedRetentionValue   int    `json:"deleted_retention_value,omitempty"`
 	DeletedRetentionUnit    string `json:"deleted_retention_unit,omitempty"` // "days" or "weeks"
 
+	// CompressionEnabled enables gzip compression of file content before
+	// encryption. Existing uncompressed backups remain fully restorable;
+	// the format is detected automatically at restore time.
+	CompressionEnabled bool `json:"compression_enabled,omitempty"`
+
 	// Infrastructure fields — stored in secrets.json (puppet-managed).
 	// These fields are never read or written by the web UI.
 	PassphraseFile  string `json:"passphrase_file,omitempty"`
@@ -163,6 +168,7 @@ func SaveUI(cfg *Config, path string) error {
 		DeletedRetentionEnabled bool     `json:"deleted_retention_enabled,omitempty"`
 		DeletedRetentionValue   int      `json:"deleted_retention_value,omitempty"`
 		DeletedRetentionUnit    string   `json:"deleted_retention_unit,omitempty"`
+		CompressionEnabled      bool     `json:"compression_enabled,omitempty"`
 	}
 	ui := uiFields{
 		RemoteHost:              cfg.RemoteHost,
@@ -177,6 +183,7 @@ func SaveUI(cfg *Config, path string) error {
 		DeletedRetentionEnabled: cfg.DeletedRetentionEnabled,
 		DeletedRetentionValue:   cfg.DeletedRetentionValue,
 		DeletedRetentionUnit:    cfg.DeletedRetentionUnit,
+		CompressionEnabled:      cfg.CompressionEnabled,
 	}
 	data, err := json.MarshalIndent(ui, "", "  ")
 	if err != nil {

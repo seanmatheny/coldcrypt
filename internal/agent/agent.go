@@ -526,7 +526,12 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 	pr, pw := io.Pipe()
 	encErrCh := make(chan error, 1)
 	go func() {
-		err := EncryptFile(a.key, f, pw)
+		var err error
+		if a.cfg.CompressionEnabled {
+			err = CompressAndEncryptFile(a.key, f, pw)
+		} else {
+			err = EncryptFile(a.key, f, pw)
+		}
 		pw.CloseWithError(err)
 		encErrCh <- err
 	}()
