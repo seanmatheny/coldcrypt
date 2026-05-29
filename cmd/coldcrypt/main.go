@@ -96,7 +96,7 @@ func printUsage() {
 Usage:
   coldcrypt init <data-dir>             Initialize a new data directory
   coldcrypt serve [--config path] [--secrets-config path]       Start web server and scheduler
-  coldcrypt backup [--config path] [--secrets-config path] [dirs...]  Run a one-off backup
+  coldcrypt backup [--config path] [--secrets-config path] [--compress|--no-compress] [dirs...]  Run a one-off backup
   coldcrypt purge [--config path] [--secrets-config path] [--path <display-prefix>]  Permanently delete backed-up blobs
   coldcrypt db-dump [--config path] [--secrets-config path] --out <file> [--no-encrypt]  Dump a copy of the database
   coldcrypt db-restore [--config path] [--secrets-config path] --from <file>  Restore a database dump (plain or encrypted)
@@ -213,6 +213,8 @@ func cmdBackup(args []string) {
 	fs := flag.NewFlagSet("backup", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.json")
 	secretsCfgPath := fs.String("secrets-config", "", "path to secrets.json (default: same directory as config.json)")
+	compress := fs.Bool("compress", false, "enable gzip compression before encryption (overrides config)")
+	noCompress := fs.Bool("no-compress", false, "disable gzip compression (overrides config)")
 	_ = fs.Parse(args)
 
 	closeLog := setupLogging()
@@ -220,6 +222,18 @@ func cmdBackup(args []string) {
 
 	dirs := fs.Args()
 	cfg, _, _ := loadCombinedConfig(*cfgPath, *secretsCfgPath)
+
+	// Per-run flags override whatever is stored in config.
+	if *compress && *noCompress {
+		fmt.Fprintln(os.Stderr, "--compress and --no-compress are mutually exclusive")
+		os.Exit(1)
+	}
+	if *compress {
+		cfg.CompressionEnabled = true
+	}
+	if *noCompress {
+		cfg.CompressionEnabled = false
+	}
 
 	database, err := db.New(cfg.DataDir)
 	if err != nil {

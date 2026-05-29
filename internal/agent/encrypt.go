@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"compress/gzip"
 	"crypto/aes"
 	"crypto/cipher"
@@ -143,9 +144,9 @@ func DecryptFile(key []byte, src io.Reader, dst io.Writer) error {
 		return fmt.Errorf("read header: %w", err)
 	}
 	switch {
-	case header == [4]byte(fileMagic):
+	case bytes.Equal(header[:], fileMagic):
 		return decryptChunked(key, src, dst)
-	case header == [4]byte(fileMagicCompressed):
+	case bytes.Equal(header[:], fileMagicCompressed):
 		return decryptChunkedDecompress(key, src, dst)
 	default:
 		return fmt.Errorf("unrecognised blob format")
@@ -227,7 +228,11 @@ func decryptChunkedDecompress(key []byte, src io.Reader, dst io.Writer) error {
 	}
 	_, copyErr := io.Copy(dst, gz)
 	gz.Close()
-	// Drain the pipe so the decryption goroutine can finish.
+	// Close the read end of the pipe before waiting for the goroutine.
+	// If io.Copy finished early (due to an error or a short gzip stream) the
+	// decryption goroutine may be blocked trying to write more data into pw.
+	// Closing pr propagates an error to pw, which unblocks the goroutine so
+	// it can exit and send on decErrCh — avoiding a deadlock.
 	pr.CloseWithError(copyErr)
 	decErr := <-decErrCh
 
