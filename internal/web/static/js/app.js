@@ -982,6 +982,7 @@ async function loadSettings() {
   document.getElementById('cfg-del-retain-enabled').checked = !!cfg.deleted_retention_enabled;
   document.getElementById('cfg-del-retain-value').value = cfg.deleted_retention_value || 14;
   document.getElementById('cfg-del-retain-unit').value = cfg.deleted_retention_unit || 'days';
+  document.getElementById('cfg-compression-enabled').checked = !!cfg.compression_enabled;
   toggleDeletedRetentionFields();
 
   try {
@@ -1006,7 +1007,8 @@ async function saveConfig() {
     exclude_regexes:  document.getElementById('cfg-exclude-regexes').value.split('\n').map(s => s.trim()).filter(Boolean),
     deleted_retention_enabled: document.getElementById('cfg-del-retain-enabled').checked,
     deleted_retention_value: Math.max(0, parseInt(document.getElementById('cfg-del-retain-value').value, 10) || 0),
-    deleted_retention_unit: document.getElementById('cfg-del-retain-unit').value
+    deleted_retention_unit: document.getElementById('cfg-del-retain-unit').value,
+    compression_enabled: document.getElementById('cfg-compression-enabled').checked
   };
   const r = await fetch('/api/config', {
     method: 'PUT',
