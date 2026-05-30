@@ -52,6 +52,15 @@ func SendTest(topic string) error {
 	return send(topic, "Coldcrypt Test", "This is a test notification from Coldcrypt.", "white_check_mark")
 }
 
+func SendScanIssues(topic string, jobID int64, scanned, inconsistencies, errs int) {
+	if topic == "" {
+		return
+	}
+	msg := fmt.Sprintf("Integrity scan job %d: %d files scanned, %d inconsistenc(ies), %d error(s). Check job history for details.",
+		jobID, scanned, inconsistencies, errs)
+	send(topic, "Coldcrypt Integrity Scan Warning", msg, "warning,mag")
+}
+
 func send(topic, title, message, tags string) error {
 	url := ntfyBaseURL + "/" + topic
 	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(message))

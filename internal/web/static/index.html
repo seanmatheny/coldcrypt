@@ -509,6 +509,12 @@
             <span><span class="text-muted">Transferred:</span> <span id="active-job-bytes">0 B</span></span>
             <span><span class="text-muted">Rate:</span> <span id="active-job-rate">—</span></span>
           </div>
+          <div id="active-scan-progress-row" class="mb-2 d-none">
+            <div class="progress" role="progressbar" aria-label="Scan progress" aria-valuemin="0" aria-valuemax="100">
+              <div id="active-scan-progress-bar" class="progress-bar bg-warning text-dark" style="width: 0%" aria-valuenow="0"></div>
+            </div>
+            <div id="active-scan-progress-text" class="small text-muted mt-1">0%</div>
+          </div>
           <canvas id="rate-graph"></canvas>
         </div>
 
@@ -605,6 +611,21 @@
               <div class="text-muted small mb-2">
                 Applies to new backups only. Existing uncompressed backups remain fully restorable.
               </div>
+              <h6 class="mb-2 text-muted mt-3">Integrity Scan</h6>
+              <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" id="cfg-scan-enabled">
+                <label class="form-check-label small" for="cfg-scan-enabled">
+                  Enable scheduled integrity scan
+                </label>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small">Schedule (cron expression)</label>
+                <input type="text" id="cfg-scan-cron" class="form-control form-control-sm" placeholder="0 3 * * 0" />
+                <div id="cfg-scan-hint" class="text-muted small mt-1">e.g. 0 3 * * 0  (weekly at 3am Sunday)</div>
+              </div>
+              <button class="btn btn-outline-warning btn-sm" id="cfg-run-scan-now">
+                <i class="fa fa-shield-halved me-1"></i>Run Scan Now
+              </button>
               <button class="btn btn-primary btn-sm mt-2" id="cfg-save-btn">
                 <i class="fa fa-save me-1"></i>Save Config
               </button>

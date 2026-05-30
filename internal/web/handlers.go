@@ -572,6 +572,8 @@ func (h *handlers) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"deleted_retention_value":   h.cfg.DeletedRetentionValue,
 		"deleted_retention_unit":    h.cfg.DeletedRetentionUnit,
 		"compression_enabled":       h.cfg.CompressionEnabled,
+		"integrity_scan_enabled":    h.cfg.IntegrityScanEnabled,
+		"integrity_scan_cron_expr":  h.cfg.IntegrityScanCronExpr,
 	}
 	writeJSON(w, http.StatusOK, sanitized)
 }
@@ -593,6 +595,8 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		DeletedRetentionValue   int      `json:"deleted_retention_value"`
 		DeletedRetentionUnit    string   `json:"deleted_retention_unit"`
 		CompressionEnabled      bool     `json:"compression_enabled"`
+		IntegrityScanEnabled    bool     `json:"integrity_scan_enabled"`
+		IntegrityScanCronExpr   string   `json:"integrity_scan_cron_expr"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -633,6 +637,8 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		h.cfg.DeletedRetentionUnit = body.DeletedRetentionUnit
 	}
 	h.cfg.CompressionEnabled = body.CompressionEnabled
+	h.cfg.IntegrityScanEnabled = body.IntegrityScanEnabled
+	h.cfg.IntegrityScanCronExpr = strings.TrimSpace(body.IntegrityScanCronExpr)
 
 	// On the first UI save after migrating from a single-file config, create
 	// secrets.json so that infrastructure fields are not lost when config.json
@@ -649,6 +655,9 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if err := config.SaveUI(h.cfg, h.cfgPath); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("save config: %v", err))
 		return
+	}
+	if h.sched != nil {
+		_ = h.sched.Reload()
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -759,18 +768,89 @@ func (h *handlers) handleGetActiveJob(w http.ResponseWriter, r *http.Request) {
 	if !status.Running {
 		status = h.agent.GetRestoreStatus()
 	}
+	if !status.Running {
+		status = h.agent.GetScanStatus()
+	}
 	resp := map[string]interface{}{
 		"running":           status.Running,
 		"job_type":          status.JobType,
 		"job_id":            status.JobID,
 		"current_file":      status.CurrentFile,
 		"files_processed":   status.FilesProcessed,
+		"total_files":       status.TotalFiles,
 		"bytes_transferred": status.BytesTransferred,
 	}
 	if !status.StartedAt.IsZero() {
 		resp["started_at"] = status.StartedAt.UTC().Format(time.RFC3339)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// POST /api/scan
+func (h *handlers) handleCreateScan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if h.agent.IsScanRunning() {
+		writeError(w, http.StatusConflict, "an integrity scan is already in progress")
+		return
+	}
+	jobID, err := h.db.CreateJobWithType("scan")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	go func() {
+		if err := h.agent.RunScan(context.Background(), jobID); err != nil {
+			if errors.Is(err, agent.ErrScanAlreadyRunning) {
+				_ = h.db.UpdateJob(jobID, "skipped", 0, 0, err.Error())
+				return
+			}
+			log.Printf("scan job %d error: %v", jobID, err)
+			_ = h.db.UpdateJob(jobID, "failed", 0, 0, err.Error())
+			notify.SendFailure(h.cfg.NtfyTopic, jobID, err.Error())
+		}
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]int64{"job_id": jobID})
+}
+
+// GET /api/scan/active
+func (h *handlers) handleGetActiveScan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	status := h.agent.GetScanStatus()
+	percent := int64(0)
+	if status.TotalFiles > 0 {
+		percent = (status.FilesProcessed * 100) / status.TotalFiles
+	}
+	resp := map[string]interface{}{
+		"running":       status.Running,
+		"job_id":        status.JobID,
+		"current_file":  status.CurrentFile,
+		"files_scanned": status.FilesProcessed,
+		"total_files":   status.TotalFiles,
+		"percent":       percent,
+	}
+	if !status.StartedAt.IsZero() {
+		resp["started_at"] = status.StartedAt.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// POST /api/scan/active/stop
+func (h *handlers) handleStopScan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !h.agent.StopScan() {
+		writeError(w, http.StatusConflict, "no integrity scan is currently running")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopping"})
 }
 
 // POST /api/jobs/active/stop — cancels the currently running backup job.
@@ -810,6 +890,15 @@ func (h *handlers) registerRoutes(mux *http.ServeMux) {
 	// Jobs
 	mux.HandleFunc("/api/jobs/active/stop", h.requireAuth(h.handleStopJob))
 	mux.HandleFunc("/api/jobs/active", h.requireAuth(h.handleGetActiveJob))
+	mux.HandleFunc("/api/scan/active/stop", h.requireAuth(h.handleStopScan))
+	mux.HandleFunc("/api/scan/active", h.requireAuth(h.handleGetActiveScan))
+	mux.HandleFunc("/api/scan", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			h.handleCreateScan(w, r)
+			return
+		}
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}))
 	mux.HandleFunc("/api/jobs", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:

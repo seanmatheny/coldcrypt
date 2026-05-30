@@ -213,6 +213,23 @@ func (c *Client) DownloadBlob(remotePath, blobID string) (io.ReadCloser, error) 
 	return &sshReadCloser{Reader: stdout, sess: sess}, nil
 }
 
+// HashBlob runs sha256sum on the remote blob file and returns the hex digest.
+func (c *Client) HashBlob(remotePath, blobID string) (string, error) {
+	if err := validateBlobID(blobID); err != nil {
+		return "", err
+	}
+	src := filepath.Join(remotePath, blobShard(blobID), blobID)
+	out, err := c.runCommand("sha256sum " + shellQuote(src))
+	if err != nil {
+		return "", fmt.Errorf("sha256sum blob %s: %w", blobID, err)
+	}
+	fields := strings.Fields(out)
+	if len(fields) < 1 || len(fields[0]) != 64 {
+		return "", fmt.Errorf("unexpected sha256sum output: %q", out)
+	}
+	return fields[0], nil
+}
+
 // EnsureDir creates remote directories recursively if they don't exist.
 func (c *Client) EnsureDir(path string) error {
 	return c.sftp.MkdirAll(path)
