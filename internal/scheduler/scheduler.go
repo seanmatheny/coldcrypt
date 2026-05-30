@@ -22,6 +22,7 @@ type Scheduler struct {
 	db       *db.DB
 	agent    *agent.Agent
 	entryIDs map[int64]cronv3.EntryID
+	scanID   cronv3.EntryID
 }
 
 // New creates a new Scheduler.
@@ -70,6 +71,7 @@ func (s *Scheduler) Reload() error {
 	s.cron.Stop()
 	s.cron = cronv3.New()
 	s.entryIDs = make(map[int64]cronv3.EntryID)
+	s.scanID = 0
 
 	if err := s.loadSchedules(); err != nil {
 		return err
@@ -100,7 +102,23 @@ func (s *Scheduler) loadSchedules() error {
 		s.entryIDs[sched.ID] = entryID
 		log.Printf("scheduler: loaded schedule %d '%s' (%s)", sched.ID, sched.Name, sched.CronExpr)
 	}
+	s.loadScanSchedule()
 	return nil
+}
+
+func (s *Scheduler) loadScanSchedule() {
+	if !s.cfg.IntegrityScanEnabled || s.cfg.IntegrityScanCronExpr == "" {
+		return
+	}
+	entryID, err := s.cron.AddFunc(s.cfg.IntegrityScanCronExpr, func() {
+		s.runScan()
+	})
+	if err != nil {
+		log.Printf("scheduler: invalid integrity scan cron expression %q: %v", s.cfg.IntegrityScanCronExpr, err)
+		return
+	}
+	s.scanID = entryID
+	log.Printf("scheduler: loaded integrity scan schedule (%s)", s.cfg.IntegrityScanCronExpr)
 }
 
 // runSchedule executes a backup for the given schedule.
@@ -138,6 +156,28 @@ func (s *Scheduler) runSchedule(scheduleID int64, name string, sourceDirs []stri
 			return
 		}
 		log.Printf("scheduler: backup '%s' failed: %v", name, err)
+		_ = s.db.UpdateJob(jobID, "failed", 0, 0, err.Error())
+		notify.SendFailure(s.cfg.NtfyTopic, jobID, err.Error())
+	}
+}
+
+func (s *Scheduler) runScan() {
+	if s.agent.IsScanRunning() {
+		log.Printf("scheduler: skipping scan: already in progress")
+		return
+	}
+	jobID, err := s.db.CreateJobWithType("scan")
+	if err != nil {
+		log.Printf("scheduler: create scan job: %v", err)
+		return
+	}
+	ctx := context.Background()
+	if err := s.agent.RunScan(ctx, jobID); err != nil {
+		if errors.Is(err, agent.ErrScanAlreadyRunning) {
+			_ = s.db.UpdateJob(jobID, "skipped", 0, 0, err.Error())
+			return
+		}
+		log.Printf("scheduler: scan failed: %v", err)
 		_ = s.db.UpdateJob(jobID, "failed", 0, 0, err.Error())
 		notify.SendFailure(s.cfg.NtfyTopic, jobID, err.Error())
 	}

@@ -77,6 +77,13 @@ type Schedule struct {
 	LastRunAt  *time.Time
 }
 
+// ScanEntry holds the data needed to verify one backed-up blob.
+type ScanEntry struct {
+	SourcePath string
+	BlobID     string
+	BlobHash   string // SHA-256 of the raw encrypted blob bytes
+}
+
 const schema = `
 CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,6 +101,7 @@ CREATE TABLE IF NOT EXISTS file_versions (
     blob_id TEXT NOT NULL,
     size INTEGER NOT NULL,
     hash TEXT NOT NULL,
+    blob_hash TEXT NOT NULL DEFAULT '',
     mtime_ns INTEGER NOT NULL DEFAULT 0,
     encrypted_at DATETIME NOT NULL,
     job_id INTEGER NOT NULL,
@@ -165,6 +173,10 @@ func New(dataDir string) (*DB, error) {
 	// be distinguished in history.
 	if err := addColumnIfMissing(conn, "backup_jobs", "job_type",
 		`ALTER TABLE backup_jobs ADD COLUMN job_type TEXT NOT NULL DEFAULT 'backup'`); err != nil {
+		return nil, err
+	}
+	if err := addColumnIfMissing(conn, "file_versions", "blob_hash",
+		`ALTER TABLE file_versions ADD COLUMN blob_hash TEXT NOT NULL DEFAULT ''`); err != nil {
 		return nil, err
 	}
 	return &DB{conn: conn}, nil
@@ -294,7 +306,7 @@ func scanJobs(rows *sql.Rows) ([]Job, error) {
 
 // UpsertFileVersion inserts or rotates versions (max 3).
 // Returns the blob ID that was evicted (if any) so the caller can delete it from remote.
-func (d *DB) UpsertFileVersion(sourcePath, displayPath, blobID, hash string, size, mtimeNS, jobID int64) (oldBlobID string, err error) {
+func (d *DB) UpsertFileVersion(sourcePath, displayPath, blobID, hash, blobHash string, size, mtimeNS, jobID int64) (oldBlobID string, err error) {
 	tx, err := d.conn.Begin()
 	if err != nil {
 		return "", err
@@ -347,8 +359,8 @@ func (d *DB) UpsertFileVersion(sourcePath, displayPath, blobID, hash string, siz
 			nextVer = int(maxVer.Int64) + 1
 		}
 		_, err = tx.Exec(
-			`INSERT INTO file_versions (file_id, version_num, blob_id, size, hash, mtime_ns, encrypted_at, job_id) VALUES (?,?,?,?,?,?,?,?)`,
-			fileID, nextVer, blobID, size, hash, mtimeNS, now, jobID,
+			`INSERT INTO file_versions (file_id, version_num, blob_id, size, hash, blob_hash, mtime_ns, encrypted_at, job_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+			fileID, nextVer, blobID, size, hash, blobHash, mtimeNS, now, jobID,
 		)
 		if err != nil {
 			return "", err
@@ -379,16 +391,49 @@ func (d *DB) UpsertFileVersion(sourcePath, displayPath, blobID, hash string, siz
 			return "", err
 		}
 		_, err = tx.Exec(
-			`INSERT INTO file_versions (file_id, version_num, blob_id, size, hash, mtime_ns, encrypted_at, job_id) VALUES (?,?,?,?,?,?,?,?)`,
-			fileID, nextVer, blobID, size, hash, mtimeNS, now, jobID,
+			`INSERT INTO file_versions (file_id, version_num, blob_id, size, hash, blob_hash, mtime_ns, encrypted_at, job_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+			fileID, nextVer, blobID, size, hash, blobHash, mtimeNS, now, jobID,
 		)
 		if err != nil {
 			return "", err
 		}
+
 	}
 
 	err = tx.Commit()
 	return oldBlobID, err
+}
+
+// ListLatestVersionsForScan returns the latest version's blobID and blob_hash
+// for every file that has a non-empty blob_hash recorded.
+func (d *DB) ListLatestVersionsForScan() ([]ScanEntry, error) {
+	rows, err := d.conn.Query(`
+		SELECT f.source_path, fv.blob_id, fv.blob_hash
+		FROM files f
+		JOIN file_versions fv ON fv.id = (
+			SELECT fv2.id
+			FROM file_versions fv2
+			WHERE fv2.file_id = f.id
+			ORDER BY fv2.encrypted_at DESC, fv2.id DESC
+			LIMIT 1
+		)
+		WHERE fv.blob_hash != ''
+		ORDER BY f.source_path
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ScanEntry
+	for rows.Next() {
+		var e ScanEntry
+		if err := rows.Scan(&e.SourcePath, &e.BlobID, &e.BlobHash); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // GetLatestVersionInfo returns the hash, size, and mtime (nanoseconds) of the

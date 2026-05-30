@@ -15,15 +15,15 @@ import (
 // secrets.json (infrastructure/puppet-managed fields) via LoadCombined.
 type Config struct {
 	// UI-editable fields — stored in config.json
-	RemoteHost      string   `json:"remote_host"`
-	RemotePort      int      `json:"remote_port"`
-	RemoteUser      string   `json:"remote_user"`
-	RemoteKeyPath   string   `json:"remote_key_path"`
-	RemotePassword  string   `json:"remote_password,omitempty"`
-	RemoteBasePath  string   `json:"remote_base_path"`
-	SourceDirs      []string `json:"source_dirs"`
-	ExcludePaths    []string `json:"exclude_paths,omitempty"`
-	ExcludeRegexes  []string `json:"exclude_regexes,omitempty"`
+	RemoteHost     string   `json:"remote_host"`
+	RemotePort     int      `json:"remote_port"`
+	RemoteUser     string   `json:"remote_user"`
+	RemoteKeyPath  string   `json:"remote_key_path"`
+	RemotePassword string   `json:"remote_password,omitempty"`
+	RemoteBasePath string   `json:"remote_base_path"`
+	SourceDirs     []string `json:"source_dirs"`
+	ExcludePaths   []string `json:"exclude_paths,omitempty"`
+	ExcludeRegexes []string `json:"exclude_regexes,omitempty"`
 	// Optional deleted-source retention. When enabled, files missing from the
 	// source are retained for the configured value/unit before automatic purge.
 	DeletedRetentionEnabled bool   `json:"deleted_retention_enabled,omitempty"`
@@ -34,6 +34,9 @@ type Config struct {
 	// encryption. Existing uncompressed backups remain fully restorable;
 	// the format is detected automatically at restore time.
 	CompressionEnabled bool `json:"compression_enabled,omitempty"`
+
+	IntegrityScanEnabled  bool   `json:"integrity_scan_enabled,omitempty"`
+	IntegrityScanCronExpr string `json:"integrity_scan_cron_expr,omitempty"`
 
 	// Infrastructure fields — stored in secrets.json (puppet-managed).
 	// These fields are never read or written by the web UI.
@@ -169,6 +172,8 @@ func SaveUI(cfg *Config, path string) error {
 		DeletedRetentionValue   int      `json:"deleted_retention_value,omitempty"`
 		DeletedRetentionUnit    string   `json:"deleted_retention_unit,omitempty"`
 		CompressionEnabled      bool     `json:"compression_enabled,omitempty"`
+		IntegrityScanEnabled    bool     `json:"integrity_scan_enabled,omitempty"`
+		IntegrityScanCronExpr   string   `json:"integrity_scan_cron_expr,omitempty"`
 	}
 	ui := uiFields{
 		RemoteHost:              cfg.RemoteHost,
@@ -184,6 +189,8 @@ func SaveUI(cfg *Config, path string) error {
 		DeletedRetentionValue:   cfg.DeletedRetentionValue,
 		DeletedRetentionUnit:    cfg.DeletedRetentionUnit,
 		CompressionEnabled:      cfg.CompressionEnabled,
+		IntegrityScanEnabled:    cfg.IntegrityScanEnabled,
+		IntegrityScanCronExpr:   cfg.IntegrityScanCronExpr,
 	}
 	data, err := json.MarshalIndent(ui, "", "  ")
 	if err != nil {

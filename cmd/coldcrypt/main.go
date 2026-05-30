@@ -75,6 +75,8 @@ func main() {
 		cmdServe(os.Args[2:])
 	case "backup":
 		cmdBackup(os.Args[2:])
+	case "scan":
+		cmdScan(os.Args[2:])
 	case "db-dump":
 		cmdDBDump(os.Args[2:])
 	case "db-restore":
@@ -97,6 +99,7 @@ Usage:
   coldcrypt init <data-dir>             Initialize a new data directory
   coldcrypt serve [--config path] [--secrets-config path]       Start web server and scheduler
   coldcrypt backup [--config path] [--secrets-config path] [--compress|--no-compress] [dirs...]  Run a one-off backup
+  coldcrypt scan [--config path] [--secrets-config path]      Run a one-off integrity scan
   coldcrypt purge [--config path] [--secrets-config path] [--path <display-prefix>]  Permanently delete backed-up blobs
   coldcrypt db-dump [--config path] [--secrets-config path] --out <file> [--no-encrypt]  Dump a copy of the database
   coldcrypt db-restore [--config path] [--secrets-config path] --from <file>  Restore a database dump (plain or encrypted)
@@ -228,6 +231,7 @@ func cmdBackup(args []string) {
 		fmt.Fprintln(os.Stderr, "--compress and --no-compress are mutually exclusive")
 		os.Exit(1)
 	}
+
 	if *compress {
 		cfg.CompressionEnabled = true
 	}
@@ -266,6 +270,40 @@ func cmdBackup(args []string) {
 		JobID:          jobID,
 	}); err != nil {
 		log.Printf("backup failed: %v", err)
+		_ = database.UpdateJob(jobID, "failed", 0, 0, err.Error())
+		os.Exit(1)
+	}
+}
+
+func cmdScan(args []string) {
+	fs := flag.NewFlagSet("scan", flag.ExitOnError)
+	cfgPath := fs.String("config", "", "path to config.json")
+	secretsCfgPath := fs.String("secrets-config", "", "path to secrets.json")
+	_ = fs.Parse(args)
+
+	closeLog := setupLogging()
+	defer closeLog()
+
+	cfg, _, _ := loadCombinedConfig(*cfgPath, *secretsCfgPath)
+	database, err := db.New(cfg.DataDir)
+	if err != nil {
+		log.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	a, err := agent.New(cfg, database)
+	if err != nil {
+		log.Fatalf("create agent: %v", err)
+	}
+
+	jobID, err := database.CreateJobWithType("scan")
+	if err != nil {
+		log.Fatalf("create scan job: %v", err)
+	}
+
+	log.Printf("Starting integrity scan job %d", jobID)
+	if err := a.RunScan(context.Background(), jobID); err != nil {
+		log.Printf("scan failed: %v", err)
 		_ = database.UpdateJob(jobID, "failed", 0, 0, err.Error())
 		os.Exit(1)
 	}

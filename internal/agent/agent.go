@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"io/fs"
 	"log"
@@ -30,6 +32,9 @@ var ErrAlreadyRunning = errors.New("a backup job is already in progress")
 // ErrRestoreAlreadyRunning is returned when a restore job is already in progress.
 var ErrRestoreAlreadyRunning = errors.New("a restore job is already in progress")
 
+// ErrScanAlreadyRunning is returned when an integrity scan is already in progress.
+var ErrScanAlreadyRunning = errors.New("an integrity scan is already in progress")
+
 // uploadWorkers is the number of concurrent encrypt-and-upload goroutines.
 const uploadWorkers = 4
 
@@ -49,6 +54,7 @@ type Agent struct {
 	running int32 // atomic: 1 while a backup job is running
 
 	restoreRunning int32 // atomic: 1 while a restore job is running
+	scanRunning    int32 // atomic: 1 while an integrity scan is running
 
 	// mu guards cancelFn, currentFile, jobID, and jobStart.
 	mu          sync.RWMutex
@@ -64,11 +70,19 @@ type Agent struct {
 	// Atomic live counters for restore jobs, reset at restore start.
 	restoreFilesProc int64
 	restoreBytesXfer int64
+	scanFilesProc    int64
+	scanTotal        int64
 
 	// Restore job metadata (guarded by mu).
 	restoreCurrentFile string
 	restoreJobID       int64
 	restoreJobStart    time.Time
+
+	// Scan job metadata (guarded by mu).
+	scanCancelFn    context.CancelFunc
+	scanCurrentFile string
+	scanJobID       int64
+	scanJobStart    time.Time
 }
 
 // AgentStatus holds a snapshot of the agent's current state for the live UI.
@@ -78,6 +92,7 @@ type AgentStatus struct {
 	JobID            int64
 	CurrentFile      string
 	FilesProcessed   int64
+	TotalFiles       int64
 	BytesTransferred int64
 	StartedAt        time.Time
 }
@@ -95,6 +110,7 @@ func (a *Agent) GetStatus() AgentStatus {
 		JobID:            jid,
 		CurrentFile:      cf,
 		FilesProcessed:   atomic.LoadInt64(&a.filesProc),
+		TotalFiles:       0,
 		BytesTransferred: atomic.LoadInt64(&a.bytesXfer),
 		StartedAt:        jstart,
 	}
@@ -113,6 +129,7 @@ func (a *Agent) GetRestoreStatus() AgentStatus {
 		JobID:            jid,
 		CurrentFile:      cf,
 		FilesProcessed:   atomic.LoadInt64(&a.restoreFilesProc),
+		TotalFiles:       0,
 		BytesTransferred: atomic.LoadInt64(&a.restoreBytesXfer),
 		StartedAt:        jstart,
 	}
@@ -158,6 +175,42 @@ func (a *Agent) IsRunning() bool {
 // IsRestoreRunning reports whether a restore job is currently in progress.
 func (a *Agent) IsRestoreRunning() bool {
 	return atomic.LoadInt32(&a.restoreRunning) == 1
+}
+
+// IsScanRunning reports whether an integrity scan is currently in progress.
+func (a *Agent) IsScanRunning() bool {
+	return atomic.LoadInt32(&a.scanRunning) == 1
+}
+
+// StopScan cancels the currently running scan job.
+func (a *Agent) StopScan() bool {
+	a.mu.RLock()
+	fn := a.scanCancelFn
+	a.mu.RUnlock()
+	if fn != nil {
+		fn()
+		return true
+	}
+	return false
+}
+
+// GetScanStatus returns a consistent snapshot of the current scan job.
+func (a *Agent) GetScanStatus() AgentStatus {
+	a.mu.RLock()
+	cf := a.scanCurrentFile
+	jid := a.scanJobID
+	jstart := a.scanJobStart
+	a.mu.RUnlock()
+	return AgentStatus{
+		Running:          atomic.LoadInt32(&a.scanRunning) == 1,
+		JobType:          "scan",
+		JobID:            jid,
+		CurrentFile:      cf,
+		FilesProcessed:   atomic.LoadInt64(&a.scanFilesProc),
+		TotalFiles:       atomic.LoadInt64(&a.scanTotal),
+		BytesTransferred: 0,
+		StartedAt:        jstart,
+	}
 }
 
 func (a *Agent) startRestore(jobID int64) error {
@@ -536,15 +589,19 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 		encErrCh <- err
 	}()
 
-	uploadErr := client.UploadBlob(
-		a.cfg.RemoteBasePath,
-		blobID,
-		&countingReader{
+	uploadReader := &hashingReader{
+		h: sha256.New(),
+		r: &countingReader{
 			r: pr,
 			onRead: func(n int) {
 				atomic.AddInt64(&a.bytesXfer, int64(n))
 			},
 		},
+	}
+	uploadErr := client.UploadBlob(
+		a.cfg.RemoteBasePath,
+		blobID,
+		uploadReader,
 	)
 	if uploadErr != nil {
 		_ = pr.CloseWithError(uploadErr)
@@ -562,6 +619,8 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 		return 0, 0, true
 	}
 
+	blobHash := uploadReader.Sum()
+
 	// Build display path relative to source dir.
 	displayPath := path
 	if rel, err := filepath.Rel(srcDir, path); err == nil {
@@ -570,7 +629,7 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 	displayPath = strings.ReplaceAll(displayPath, string(os.PathSeparator), "/")
 
 	// Store version in DB.
-	oldBlobID, err := a.db.UpsertFileVersion(path, displayPath, blobID, hash, currSize, currMtimeNS, opts.JobID)
+	oldBlobID, err := a.db.UpsertFileVersion(path, displayPath, blobID, hash, blobHash, currSize, currMtimeNS, opts.JobID)
 	if err != nil {
 		log.Printf("db upsert error %s: %v", path, err)
 		return 0, 0, true
@@ -598,6 +657,23 @@ func (c *countingReader) Read(p []byte) (int, error) {
 		c.onRead(n)
 	}
 	return n, err
+}
+
+type hashingReader struct {
+	r io.Reader
+	h hash.Hash
+}
+
+func (hr *hashingReader) Read(p []byte) (int, error) {
+	n, err := hr.r.Read(p)
+	if n > 0 {
+		_, _ = hr.h.Write(p[:n])
+	}
+	return n, err
+}
+
+func (hr *hashingReader) Sum() string {
+	return fmt.Sprintf("%x", hr.h.Sum(nil))
 }
 
 func compileExcludeRegexes(patterns []string) ([]*regexp.Regexp, error) {

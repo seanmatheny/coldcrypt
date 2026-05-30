@@ -180,6 +180,8 @@ function bindGlobal() {
   document.getElementById('cfg-save-btn').addEventListener('click', saveConfig);
   document.getElementById('cfg-pwd-btn').addEventListener('click', changePassword);
   document.getElementById('cfg-del-retain-enabled').addEventListener('change', toggleDeletedRetentionFields);
+  document.getElementById('cfg-scan-enabled').addEventListener('change', toggleIntegrityScanFields);
+  document.getElementById('cfg-run-scan-now').addEventListener('click', runScanNow);
 }
 
 // ── Dashboard ──────────────────────────────────────────────────────────────
@@ -558,6 +560,7 @@ function jobRow(job) {
 }
 
 function jobRowFull(job) {
+  const errText = formatScanResultMessage(job);
   return `<tr>
     <td class="text-muted small">#${job.ID}</td>
     <td>${statusBadge(job.Status)}</td>
@@ -566,14 +569,30 @@ function jobRowFull(job) {
     <td class="small">${job.CompletedAt ? fmtDate(job.CompletedAt) : '—'}</td>
     <td class="small">${job.FilesProcessed}</td>
     <td class="small">${fmtSize(job.BytesTransferred)}</td>
-    <td class="small text-danger">${esc(job.ErrorMessage || '')}</td>
+    <td class="small text-danger">${esc(errText)}</td>
     <td class="small"><button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="openJobFiles(${job.ID})" title="View files transferred"><i class="fa fa-list"></i></button></td>
   </tr>`;
+}
+
+function formatScanResultMessage(job) {
+  if (job.JobType !== 'scan') {
+    return job.ErrorMessage || '';
+  }
+  if (job.ErrorMessage) {
+    return job.ErrorMessage;
+  }
+  if ((job.FilesProcessed || 0) > 0) {
+    return `${job.FilesProcessed} files scanned, no issues`;
+  }
+  return '';
 }
 
 function jobTypeBadge(type) {
   if (type === 'restore') {
     return '<span class="badge bg-info text-dark">restore</span>';
+  }
+  if (type === 'scan') {
+    return '<span class="badge bg-warning text-dark">integrity scan</span>';
   }
   return '<span class="badge bg-primary">backup</span>';
 }
@@ -684,15 +703,24 @@ function stopActiveJobPolling() {
 }
 
 async function pollActiveJob() {
-  const status = await apiFetch('/api/jobs/active');
+  let status = await apiFetch('/api/jobs/active');
   if (!status) return;
+  if (status.running && status.job_type === 'scan') {
+    const scanStatus = await apiFetch('/api/scan/active');
+    if (scanStatus) {
+      status = { ...status, ...scanStatus };
+      status.files_processed = scanStatus.files_scanned;
+    }
+  }
   updateActiveJobUI(status);
 }
 
 function updateActiveJobUI(status) {
   const isRunning = status.running;
-  const isBackupJob = (status.job_type || 'backup') === 'backup';
-  const runningLabel = isBackupJob ? 'BACKUP RUNNING' : 'RESTORE RUNNING';
+  const jobType = status.job_type || 'backup';
+  const isBackupJob = jobType === 'backup';
+  const isScanJob = jobType === 'scan';
+  const runningLabel = isBackupJob ? 'BACKUP RUNNING' : (isScanJob ? 'SCAN RUNNING' : 'RESTORE RUNNING');
 
   // Accumulate rate samples.
   if (isRunning) {
@@ -732,17 +760,32 @@ function updateActiveJobUI(status) {
       const jobIdEl = document.getElementById('active-job-id');
       if (jobIdEl) jobIdEl.textContent = `Job #${status.job_id}`;
       const stopBtn = document.getElementById('stop-job-btn');
-      if (stopBtn) stopBtn.classList.toggle('d-none', !isBackupJob);
+      if (stopBtn) {
+        stopBtn.classList.toggle('d-none', !(isBackupJob || isScanJob));
+        stopBtn.innerHTML = '<i class="fa fa-stop me-1"></i>Stop ' + (isScanJob ? 'Scan' : 'Backup');
+      }
       const fileEl = document.getElementById('active-job-file');
       if (fileEl) fileEl.textContent = status.current_file || '—';
       const filesEl = document.getElementById('active-job-files');
       if (filesEl) filesEl.textContent = (status.files_processed || 0).toLocaleString();
       const bytesEl = document.getElementById('active-job-bytes');
-      if (bytesEl) bytesEl.textContent = fmtSize(status.bytes_transferred || 0);
+      if (bytesEl) bytesEl.textContent = isScanJob ? '—' : fmtSize(status.bytes_transferred || 0);
       const rateEl = document.getElementById('active-job-rate');
-      if (rateEl) rateEl.textContent = rateStr;
+      if (rateEl) rateEl.textContent = isScanJob ? '—' : rateStr;
+      const progressRow = document.getElementById('active-scan-progress-row');
+      const progressBar = document.getElementById('active-scan-progress-bar');
+      const progressText = document.getElementById('active-scan-progress-text');
+      if (progressRow) progressRow.classList.toggle('d-none', !isScanJob);
+      if (isScanJob && progressBar && progressText) {
+        const pct = Math.max(0, Math.min(100, parseInt(status.percent || 0, 10)));
+        const total = status.total_files || 0;
+        progressBar.style.width = pct + '%';
+        progressBar.setAttribute('aria-valuenow', String(pct));
+        progressText.textContent = `${pct}% (${(status.files_processed || 0).toLocaleString()} / ${total.toLocaleString()})`;
+      }
       const canvas = document.getElementById('rate-graph');
-      if (canvas) drawRateGraph(canvas, rateSamples);
+      if (canvas) canvas.classList.toggle('d-none', isScanJob);
+      if (canvas && !isScanJob) drawRateGraph(canvas, rateSamples);
     } else {
       panel.classList.add('d-none');
     }
@@ -758,15 +801,15 @@ function updateActiveJobUI(status) {
       const el = document.getElementById('dash-active-job-id');
       if (el) el.textContent = `Job #${status.job_id}`;
       const stopBtn = document.getElementById('dash-stop-btn');
-      if (stopBtn) stopBtn.classList.toggle('d-none', !isBackupJob);
+      if (stopBtn) stopBtn.classList.toggle('d-none', !(isBackupJob || isScanJob));
       const fileEl = document.getElementById('dash-active-file');
       if (fileEl) fileEl.textContent = status.current_file || '—';
       const filesEl = document.getElementById('dash-active-files');
       if (filesEl) filesEl.textContent = (status.files_processed || 0).toLocaleString();
       const bytesEl = document.getElementById('dash-active-bytes');
-      if (bytesEl) bytesEl.textContent = fmtSize(status.bytes_transferred || 0);
+      if (bytesEl) bytesEl.textContent = isScanJob ? '—' : fmtSize(status.bytes_transferred || 0);
       const rateEl = document.getElementById('dash-active-rate');
-      if (rateEl) rateEl.textContent = rateStr;
+      if (rateEl) rateEl.textContent = isScanJob ? '—' : rateStr;
     } else {
       dashPanel.classList.add('d-none');
     }
@@ -774,7 +817,10 @@ function updateActiveJobUI(status) {
 }
 
 async function stopJob() {
-  const r = await fetch('/api/jobs/active/stop', { method: 'POST' });
+  const status = await apiFetch('/api/jobs/active');
+  if (!status || !status.running) return;
+  const stopURL = status.job_type === 'scan' ? '/api/scan/active/stop' : '/api/jobs/active/stop';
+  const r = await fetch(stopURL, { method: 'POST' });
   if (!r.ok) {
     const d = await r.json().catch(() => ({ error: 'Stop failed' }));
     alert('Error: ' + (d.error || 'Stop failed'));
@@ -862,6 +908,19 @@ async function runBackupNow() {
     const d = await r.json().catch(() => ({ error: 'Unknown error' }));
     alert('Error: ' + (d.error || 'Failed to start backup'));
   }
+}
+
+async function runScanNow() {
+  const r = await fetch('/api/scan', { method: 'POST' });
+  if (r.ok) {
+    const d = await r.json();
+    alert(`Integrity scan started (ID: ${d.job_id})`);
+    navigateTo('jobs');
+    loadJobs();
+    return;
+  }
+  const d = await r.json().catch(() => ({ error: 'Unknown error' }));
+  alert('Error: ' + (d.error || 'Failed to start integrity scan'));
 }
 
 // ── Schedules ──────────────────────────────────────────────────────────────
@@ -983,7 +1042,10 @@ async function loadSettings() {
   document.getElementById('cfg-del-retain-value').value = cfg.deleted_retention_value || 14;
   document.getElementById('cfg-del-retain-unit').value = cfg.deleted_retention_unit || 'days';
   document.getElementById('cfg-compression-enabled').checked = !!cfg.compression_enabled;
+  document.getElementById('cfg-scan-enabled').checked = !!cfg.integrity_scan_enabled;
+  document.getElementById('cfg-scan-cron').value = cfg.integrity_scan_cron_expr || '';
   toggleDeletedRetentionFields();
+  toggleIntegrityScanFields();
 
   try {
     const r = await fetch('/api/version');
@@ -1008,7 +1070,9 @@ async function saveConfig() {
     deleted_retention_enabled: document.getElementById('cfg-del-retain-enabled').checked,
     deleted_retention_value: Math.max(0, parseInt(document.getElementById('cfg-del-retain-value').value, 10) || 0),
     deleted_retention_unit: document.getElementById('cfg-del-retain-unit').value,
-    compression_enabled: document.getElementById('cfg-compression-enabled').checked
+    compression_enabled: document.getElementById('cfg-compression-enabled').checked,
+    integrity_scan_enabled: document.getElementById('cfg-scan-enabled').checked,
+    integrity_scan_cron_expr: document.getElementById('cfg-scan-cron').value.trim()
   };
   const r = await fetch('/api/config', {
     method: 'PUT',
@@ -1091,4 +1155,12 @@ function toggleDeletedRetentionFields() {
   const enabled = document.getElementById('cfg-del-retain-enabled').checked;
   document.getElementById('cfg-del-retain-value').disabled = !enabled;
   document.getElementById('cfg-del-retain-unit').disabled = !enabled;
+}
+
+function toggleIntegrityScanFields() {
+  const enabled = document.getElementById('cfg-scan-enabled').checked;
+  const cron = document.getElementById('cfg-scan-cron');
+  const hint = document.getElementById('cfg-scan-hint');
+  if (cron) cron.disabled = !enabled;
+  if (hint) hint.classList.toggle('d-none', !enabled);
 }
