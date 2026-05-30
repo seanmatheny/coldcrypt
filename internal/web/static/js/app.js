@@ -560,7 +560,7 @@ function jobRow(job) {
 }
 
 function jobRowFull(job) {
-  const errText = scanSummary(job);
+  const errText = formatScanResultMessage(job);
   return `<tr>
     <td class="text-muted small">#${job.ID}</td>
     <td>${statusBadge(job.Status)}</td>
@@ -574,7 +574,7 @@ function jobRowFull(job) {
   </tr>`;
 }
 
-function scanSummary(job) {
+function formatScanResultMessage(job) {
   if (job.JobType !== 'scan') {
     return job.ErrorMessage || '';
   }
@@ -762,7 +762,7 @@ function updateActiveJobUI(status) {
       const stopBtn = document.getElementById('stop-job-btn');
       if (stopBtn) {
         stopBtn.classList.toggle('d-none', !(isBackupJob || isScanJob));
-        stopBtn.innerHTML = isScanJob ? '<i class="fa fa-stop me-1"></i>Stop Scan' : '<i class="fa fa-stop me-1"></i>Stop Backup';
+        stopBtn.innerHTML = '<i class="fa fa-stop me-1"></i>Stop ' + (isScanJob ? 'Scan' : 'Backup');
       }
       const fileEl = document.getElementById('active-job-file');
       if (fileEl) fileEl.textContent = status.current_file || '—';
@@ -908,19 +908,19 @@ async function runBackupNow() {
     const d = await r.json().catch(() => ({ error: 'Unknown error' }));
     alert('Error: ' + (d.error || 'Failed to start backup'));
   }
+}
 
-  async function runScanNow() {
-    const r = await fetch('/api/scan', { method: 'POST' });
-    if (r.ok) {
-      const d = await r.json();
-      alert(`Integrity scan started (ID: ${d.job_id})`);
-      navigateTo('jobs');
-      loadJobs();
-      return;
-    }
-    const d = await r.json().catch(() => ({ error: 'Unknown error' }));
-    alert('Error: ' + (d.error || 'Failed to start integrity scan'));
+async function runScanNow() {
+  const r = await fetch('/api/scan', { method: 'POST' });
+  if (r.ok) {
+    const d = await r.json();
+    alert(`Integrity scan started (ID: ${d.job_id})`);
+    navigateTo('jobs');
+    loadJobs();
+    return;
   }
+  const d = await r.json().catch(() => ({ error: 'Unknown error' }));
+  alert('Error: ' + (d.error || 'Failed to start integrity scan'));
 }
 
 // ── Schedules ──────────────────────────────────────────────────────────────

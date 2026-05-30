@@ -22,6 +22,7 @@ type Scheduler struct {
 	db       *db.DB
 	agent    *agent.Agent
 	entryIDs map[int64]cronv3.EntryID
+	scanID   cronv3.EntryID
 }
 
 // New creates a new Scheduler.
@@ -70,6 +71,7 @@ func (s *Scheduler) Reload() error {
 	s.cron.Stop()
 	s.cron = cronv3.New()
 	s.entryIDs = make(map[int64]cronv3.EntryID)
+	s.scanID = 0
 
 	if err := s.loadSchedules(); err != nil {
 		return err
@@ -108,13 +110,14 @@ func (s *Scheduler) loadScanSchedule() {
 	if !s.cfg.IntegrityScanEnabled || s.cfg.IntegrityScanCronExpr == "" {
 		return
 	}
-	_, err := s.cron.AddFunc(s.cfg.IntegrityScanCronExpr, func() {
+	entryID, err := s.cron.AddFunc(s.cfg.IntegrityScanCronExpr, func() {
 		s.runScan()
 	})
 	if err != nil {
 		log.Printf("scheduler: invalid integrity scan cron expression %q: %v", s.cfg.IntegrityScanCronExpr, err)
 		return
 	}
+	s.scanID = entryID
 	log.Printf("scheduler: loaded integrity scan schedule (%s)", s.cfg.IntegrityScanCronExpr)
 }
 

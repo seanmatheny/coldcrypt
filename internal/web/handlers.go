@@ -539,7 +539,9 @@ func (h *handlers) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if h.sched != nil {
-		_ = h.sched.Reload()
+		if err := h.sched.Reload(); err != nil {
+			log.Printf("config reload schedules: %v", err)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

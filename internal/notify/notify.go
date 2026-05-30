@@ -56,8 +56,16 @@ func SendScanIssues(topic string, jobID int64, scanned, inconsistencies, errs in
 	if topic == "" {
 		return
 	}
-	msg := fmt.Sprintf("Integrity scan job %d: %d files scanned, %d inconsistenc(ies), %d error(s). Check job history for details.",
-		jobID, scanned, inconsistencies, errs)
+	inconsistencyLabel := "inconsistencies"
+	if inconsistencies == 1 {
+		inconsistencyLabel = "inconsistency"
+	}
+	errorLabel := "errors"
+	if errs == 1 {
+		errorLabel = "error"
+	}
+	msg := fmt.Sprintf("Integrity scan job %d: %d files scanned, %d %s, %d %s. Check job history for details.",
+		jobID, scanned, inconsistencies, inconsistencyLabel, errs, errorLabel)
 	send(topic, "Coldcrypt Integrity Scan Warning", msg, "warning,mag")
 }
 

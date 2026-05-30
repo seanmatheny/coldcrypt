@@ -15,6 +15,7 @@ import (
 )
 
 const scanWorkers = 4
+const maxInconsistencyPathListLength = 800
 
 func (a *Agent) RunScan(ctx context.Context, jobID int64) error {
 	if !atomic.CompareAndSwapInt32(&a.scanRunning, 0, 1) {
@@ -123,8 +124,9 @@ func (a *Agent) RunScan(ctx context.Context, jobID int64) error {
 		parts := []string{fmt.Sprintf("%d files scanned", filesScanned)}
 		if len(inconsistencies) > 0 {
 			pathList := strings.Join(inconsistencies, ", ")
-			if len(pathList) > 800 {
-				pathList = pathList[:800] + "..."
+			pathRunes := []rune(pathList)
+			if len(pathRunes) > maxInconsistencyPathListLength {
+				pathList = string(pathRunes[:maxInconsistencyPathListLength]) + "..."
 			}
 			parts = append(parts, fmt.Sprintf("%d inconsistenc(ies) found: %s", len(inconsistencies), pathList))
 		}
