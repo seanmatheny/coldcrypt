@@ -624,27 +624,32 @@ async function openJobFiles(jobID) {
   document.getElementById('job-files-count').textContent = '';
   jobFilesModal.show();
 
-  const [files, job] = await Promise.all([
+  const [files, job, errors] = await Promise.all([
     apiFetch(`/api/jobs/${jobID}/files`),
-    apiFetch(`/api/jobs/${jobID}`)
+    apiFetch(`/api/jobs/${jobID}`),
+    apiFetch(`/api/jobs/${jobID}/errors`)
   ]);
   if (!files) {
     document.getElementById('job-files-body').innerHTML =
-      '<div class="text-muted text-center py-3">Failed to load files.</div>';
+      '<div class="text-muted text-center py-3">Failed to load job details.</div>';
     return;
   }
-  if (files.length === 0) {
+
+  const jobErrors = errors || [];
+  const hasFiles = files.length > 0;
+  const hasErrors = jobErrors.length > 0;
+
+  if (!hasFiles && !hasErrors) {
     let msg;
     if (!job || job.JobType !== 'backup') {
       msg = 'No file-level detail is recorded for this job. ' +
         '(File tracking is only available for backup jobs.)';
     } else if (job.Status === 'failed' || job.Status === 'completed_with_errors') {
       const errDetail = job.ErrorMessage
-        ? `<br><strong>Error:</strong> ${esc(job.ErrorMessage)}`
+        ? `<br><strong>Summary:</strong> ${esc(job.ErrorMessage)}`
         : '';
       msg = `This backup job ${job.Status === 'failed' ? 'failed' : 'completed with errors'}. ` +
-        `No file-level detail is available because files that encounter errors during ` +
-        `backup are not recorded in the file log.${errDetail}`;
+        `No detailed file-level error information is available for this job.${errDetail}`;
     } else if (job.Status === 'stopped') {
       msg = 'This backup job was stopped by the user. ' +
         'No file-level detail was recorded.';
@@ -656,22 +661,53 @@ async function openJobFiles(jobID) {
     return;
   }
 
-  document.getElementById('job-files-count').textContent = `${files.length.toLocaleString()} file(s)`;
+  let html = '';
+  const counts = [];
 
-  let html = `<table class="table table-dark table-sm mb-0" style="font-size:0.82rem;">
-    <thead><tr>
-      <th>File</th>
-      <th class="text-end" style="white-space:nowrap;">Size</th>
-      <th class="text-end" style="white-space:nowrap;">Processed At</th>
-    </tr></thead><tbody>`;
-  for (const f of files) {
-    html += `<tr>
-      <td style="word-break:break-all;font-family:monospace;font-size:0.78rem;">${esc(f.DisplayPath)}</td>
-      <td class="text-end text-muted" style="white-space:nowrap;">${fmtSize(f.Size)}</td>
-      <td class="text-end text-muted" style="white-space:nowrap;">${fmtDate(f.EncryptedAt)}</td>
-    </tr>`;
+  if (hasErrors) {
+    counts.push(`${jobErrors.length.toLocaleString()} error(s)`);
+    const summaryNote = job && job.ErrorMessage
+      ? `<div class="text-danger small mb-2"><strong>Summary:</strong> ${esc(job.ErrorMessage)}</div>`
+      : '';
+    html += `<div class="mb-3">${summaryNote}<table class="table table-dark table-sm mb-0" style="font-size:0.82rem;">
+      <thead><tr>
+        <th>File</th>
+        <th style="white-space:nowrap;">Error Type</th>
+        <th>Message</th>
+      </tr></thead><tbody>`;
+    for (const e of jobErrors) {
+      html += `<tr class="table-danger">
+        <td style="word-break:break-all;font-family:monospace;font-size:0.78rem;">${esc(e.FilePath)}</td>
+        <td class="text-nowrap">${esc(e.ErrorType)}</td>
+        <td style="word-break:break-all;font-size:0.78rem;">${esc(e.Message)}</td>
+      </tr>`;
+    }
+    html += '</tbody></table></div>';
   }
-  html += '</tbody></table>';
+
+  if (hasFiles) {
+    counts.push(`${files.length.toLocaleString()} file(s) transferred`);
+    if (hasErrors) {
+      html += '<hr class="border-secondary my-2">';
+      html += '<h6 class="text-muted small mb-2">Successfully processed files:</h6>';
+    }
+    html += `<table class="table table-dark table-sm mb-0" style="font-size:0.82rem;">
+      <thead><tr>
+        <th>File</th>
+        <th class="text-end" style="white-space:nowrap;">Size</th>
+        <th class="text-end" style="white-space:nowrap;">Processed At</th>
+      </tr></thead><tbody>`;
+    for (const f of files) {
+      html += `<tr>
+        <td style="word-break:break-all;font-family:monospace;font-size:0.78rem;">${esc(f.DisplayPath)}</td>
+        <td class="text-end text-muted" style="white-space:nowrap;">${fmtSize(f.Size)}</td>
+        <td class="text-end text-muted" style="white-space:nowrap;">${fmtDate(f.EncryptedAt)}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  }
+
+  document.getElementById('job-files-count').textContent = counts.join(', ');
   document.getElementById('job-files-body').innerHTML = html;
 }
 

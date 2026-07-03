@@ -354,6 +354,7 @@ func (a *Agent) Run(ctx context.Context, opts BackupOptions) error {
 		walkErr := filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				log.Printf("walk error at %s: %v", path, err)
+				_ = a.db.InsertJobError(opts.JobID, path, "walk", err.Error())
 				mu.Lock()
 				walkErrCount++
 				mu.Unlock()
@@ -528,6 +529,7 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 	info, err := os.Stat(path)
 	if err != nil {
 		log.Printf("stat error %s: %v", path, err)
+		_ = a.db.InsertJobError(opts.JobID, path, "stat", err.Error())
 		return 0, 0, true
 	}
 	currSize := info.Size()
@@ -536,6 +538,7 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 	storedHash, storedSize, storedMtimeNS, err := a.db.GetLatestVersionInfo(path)
 	if err != nil {
 		log.Printf("db info check error %s: %v", path, err)
+		_ = a.db.InsertJobError(opts.JobID, path, "db", err.Error())
 		return 0, 0, true
 	}
 	if storedHash != "" && currSize == storedSize && currMtimeNS == storedMtimeNS {
@@ -551,6 +554,7 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 	hash, err := HashFile(path)
 	if err != nil {
 		log.Printf("hash error %s: %v", path, err)
+		_ = a.db.InsertJobError(opts.JobID, path, "hash", err.Error())
 		return 0, 0, true
 	}
 	if storedHash == hash {
@@ -570,6 +574,7 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 	f, err := os.Open(path)
 	if err != nil {
 		log.Printf("open error %s: %v", path, err)
+		_ = a.db.InsertJobError(opts.JobID, path, "open", err.Error())
 		return 0, 0, true
 	}
 	defer f.Close()
@@ -612,10 +617,12 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 
 	if uploadErr != nil {
 		log.Printf("upload error %s: %v", path, uploadErr)
+		_ = a.db.InsertJobError(opts.JobID, path, "upload", uploadErr.Error())
 		return 0, 0, true
 	}
 	if encErr != nil {
 		log.Printf("encrypt error %s: %v", path, encErr)
+		_ = a.db.InsertJobError(opts.JobID, path, "encrypt", encErr.Error())
 		return 0, 0, true
 	}
 
@@ -632,6 +639,7 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 	oldBlobID, err := a.db.UpsertFileVersion(path, displayPath, blobID, hash, blobHash, currSize, currMtimeNS, opts.JobID)
 	if err != nil {
 		log.Printf("db upsert error %s: %v", path, err)
+		_ = a.db.InsertJobError(opts.JobID, path, "db", err.Error())
 		return 0, 0, true
 	}
 

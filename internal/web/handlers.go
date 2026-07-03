@@ -204,6 +204,23 @@ func (h *handlers) handleListJobFiles(w http.ResponseWriter, r *http.Request, id
 	writeJSON(w, http.StatusOK, entries)
 }
 
+// GET /api/jobs/:id/errors — returns per-file errors recorded during a backup job.
+func (h *handlers) handleListJobErrors(w http.ResponseWriter, r *http.Request, id int64) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	errors, err := h.db.ListJobErrors(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if errors == nil {
+		errors = []db.JobError{}
+	}
+	writeJSON(w, http.StatusOK, errors)
+}
+
 // GET /api/storage — queries the remote backup volume for disk usage and
 // returns utilisation details. Sends a push notification when free space
 // drops to 9 % or below (rate-limited to one notification per hour).
@@ -920,6 +937,16 @@ func (h *handlers) registerRoutes(mux *http.ServeMux) {
 				return
 			}
 			h.handleListJobFiles(w, r, id)
+			return
+		}
+		// /api/jobs/:id/errors — list per-file errors for a job
+		if strings.HasSuffix(r.URL.Path, "/errors") {
+			id, ok := parseIDFromPath(r.URL.Path, "/api/jobs/", "/errors")
+			if !ok {
+				writeError(w, http.StatusBadRequest, "invalid job id")
+				return
+			}
+			h.handleListJobErrors(w, r, id)
 			return
 		}
 		id, ok := parseIDFromPath(r.URL.Path, "/api/jobs/", "")

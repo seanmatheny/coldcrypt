@@ -66,6 +66,13 @@ type JobFileEntry struct {
 	EncryptedAt time.Time
 }
 
+// JobError records a per-file error that occurred during a backup job.
+type JobError struct {
+	FilePath  string
+	ErrorType string
+	Message   string
+}
+
 // Schedule represents a scheduled backup.
 type Schedule struct {
 	ID         int64
@@ -118,6 +125,17 @@ CREATE TABLE IF NOT EXISTS backup_jobs (
     bytes_transferred INTEGER DEFAULT 0,
     error_message TEXT
 );
+
+CREATE TABLE IF NOT EXISTS job_errors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL,
+    file_path TEXT NOT NULL,
+    error_type TEXT NOT NULL,
+    message TEXT NOT NULL,
+    created_at DATETIME NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_errors_job_id ON job_errors(job_id);
 
 CREATE TABLE IF NOT EXISTS schedules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1025,6 +1043,36 @@ func (d *DB) ListFilesByJobID(jobID int64) ([]JobFileEntry, error) {
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
+}
+
+// InsertJobError records a per-file error that occurred during a backup job.
+func (d *DB) InsertJobError(jobID int64, filePath, errorType, message string) error {
+	_, err := d.conn.Exec(
+		`INSERT INTO job_errors (job_id, file_path, error_type, message, created_at) VALUES (?, ?, ?, ?, ?)`,
+		jobID, filePath, errorType, message, time.Now().UTC().Format(time.RFC3339),
+	)
+	return err
+}
+
+// ListJobErrors returns all per-file errors recorded for the given job.
+func (d *DB) ListJobErrors(jobID int64) ([]JobError, error) {
+	rows, err := d.conn.Query(
+		`SELECT file_path, error_type, message FROM job_errors WHERE job_id = ? ORDER BY file_path`,
+		jobID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var errors []JobError
+	for rows.Next() {
+		var e JobError
+		if err := rows.Scan(&e.FilePath, &e.ErrorType, &e.Message); err != nil {
+			return nil, err
+		}
+		errors = append(errors, e)
+	}
+	return errors, rows.Err()
 }
 
 // DeleteFilesByIDs removes file/version rows for the provided file IDs.
