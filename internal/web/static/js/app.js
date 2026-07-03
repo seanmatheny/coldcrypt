@@ -817,7 +817,7 @@ function updateActiveJobUI(status) {
       const stopBtn = document.getElementById('stop-job-btn');
       if (stopBtn) {
         stopBtn.classList.toggle('d-none', !(isBackupJob || isScanJob));
-        stopBtn.innerHTML = '<i class="fa fa-stop me-1"></i>Stop ' + (isScanJob ? 'Scan' : 'Backup');
+        stopBtn.innerHTML = '<i class="fa fa-stop me-1"></i>Stop Job';
       }
       const fileEl = document.getElementById('active-job-file');
       if (fileEl) fileEl.textContent = status.current_file || '—';
