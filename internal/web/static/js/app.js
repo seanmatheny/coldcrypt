@@ -624,16 +624,35 @@ async function openJobFiles(jobID) {
   document.getElementById('job-files-count').textContent = '';
   jobFilesModal.show();
 
-  const files = await apiFetch(`/api/jobs/${jobID}/files`);
+  const [files, job] = await Promise.all([
+    apiFetch(`/api/jobs/${jobID}/files`),
+    apiFetch(`/api/jobs/${jobID}`)
+  ]);
   if (!files) {
     document.getElementById('job-files-body').innerHTML =
       '<div class="text-muted text-center py-3">Failed to load files.</div>';
     return;
   }
   if (files.length === 0) {
+    let msg;
+    if (!job || job.JobType !== 'backup') {
+      msg = 'No file-level detail is recorded for this job. ' +
+        '(File tracking is only available for backup jobs.)';
+    } else if (job.Status === 'failed' || job.Status === 'completed_with_errors') {
+      const errDetail = job.ErrorMessage
+        ? `<br><strong>Error:</strong> ${esc(job.ErrorMessage)}`
+        : '';
+      msg = `This backup job ${job.Status === 'failed' ? 'failed' : 'completed with errors'}. ` +
+        `No file-level detail is available because files that encounter errors during ` +
+        `backup are not recorded in the file log.${errDetail}`;
+    } else if (job.Status === 'stopped') {
+      msg = 'This backup job was stopped by the user. ' +
+        'No file-level detail was recorded.';
+    } else {
+      msg = 'No file-level detail is available for this backup job.';
+    }
     document.getElementById('job-files-body').innerHTML =
-      '<div class="text-muted text-center py-3">No file-level detail is recorded for this job. ' +
-      '(File tracking is only available for backup jobs.)</div>';
+      `<div class="text-muted text-center py-3">${msg}</div>`;
     return;
   }
 
