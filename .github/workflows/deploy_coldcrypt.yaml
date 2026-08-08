@@ -1,3 +1,4 @@
+# this is only for puppetised environments with github runners
 on:
     push:
         branches:
