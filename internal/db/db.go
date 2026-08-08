@@ -503,9 +503,12 @@ func (d *DB) ListFiles(search string, limit int) ([]FileEntry, error) {
 		COALESCE((SELECT fv.size FROM file_versions fv WHERE fv.file_id=f.id ORDER BY fv.encrypted_at DESC LIMIT 1), 0) AS latest_size,
 		COALESCE((SELECT fv.mtime_ns FROM file_versions fv WHERE fv.file_id=f.id ORDER BY fv.encrypted_at DESC LIMIT 1), 0) AS latest_mtime_ns
 		FROM files f`
+	// Exclude files awaiting deleted-source retention purge so the Files tab
+	// (both tree and flat search) only shows content currently present in the source.
+	query += ` WHERE f.deleted_at IS NULL`
 	args := []interface{}{}
 	if search != "" {
-		query += ` WHERE display_path LIKE ?`
+		query += ` AND display_path LIKE ?`
 		args = append(args, "%"+search+"%")
 	}
 	query += ` ORDER BY display_path`
@@ -855,12 +858,17 @@ func (d *DB) ListDirectChildren(prefix string) ([]DirChild, error) {
 		rows *sql.Rows
 		err  error
 	)
+	// Files awaiting deleted-source retention purge (deleted_at IS NOT NULL) are
+	// excluded so the tree reflects only content currently present in the source.
+	// Because directory nodes are derived from file paths, a directory whose files
+	// have all been deleted no longer appears — empty directories drop out of the tree.
 	if prefix == "" {
 		rows, err = d.conn.Query(
 			`SELECT f.id, f.display_path,
 			        (SELECT fv.size FROM file_versions fv WHERE fv.file_id=f.id ORDER BY fv.encrypted_at DESC LIMIT 1) AS latest_size,
 			        (SELECT fv.mtime_ns FROM file_versions fv WHERE fv.file_id=f.id ORDER BY fv.encrypted_at DESC LIMIT 1) AS latest_mtime_ns
 			   FROM files f
+			  WHERE f.deleted_at IS NULL
 			  ORDER BY f.display_path`,
 		)
 	} else {
@@ -869,7 +877,7 @@ func (d *DB) ListDirectChildren(prefix string) ([]DirChild, error) {
 			        (SELECT fv.size FROM file_versions fv WHERE fv.file_id=f.id ORDER BY fv.encrypted_at DESC LIMIT 1) AS latest_size,
 			        (SELECT fv.mtime_ns FROM file_versions fv WHERE fv.file_id=f.id ORDER BY fv.encrypted_at DESC LIMIT 1) AS latest_mtime_ns
 			   FROM files f
-			  WHERE f.display_path LIKE ?
+			  WHERE f.display_path LIKE ? AND f.deleted_at IS NULL
 			  ORDER BY f.display_path`,
 			prefix+"%",
 		)
