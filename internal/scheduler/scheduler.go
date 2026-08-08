@@ -146,14 +146,16 @@ func (s *Scheduler) runSchedule(scheduleID int64, name string, sourceDirs []stri
 
 	_ = s.db.UpdateScheduleLastRun(scheduleID)
 
-	dirs := sourceDirs
-	if len(dirs) == 0 {
-		dirs = s.cfg.SourceDirs
+	if len(sourceDirs) == 0 {
+		msg := fmt.Sprintf("schedule '%s' has no source directories configured", name)
+		log.Printf("scheduler: %s", msg)
+		_ = s.db.UpdateJob(jobID, "failed", 0, 0, msg)
+		return
 	}
 
 	ctx := context.Background()
 	if err := s.agent.Run(ctx, agent.BackupOptions{
-		SourceDirs:     dirs,
+		SourceDirs:     sourceDirs,
 		ExcludePaths:   s.cfg.ExcludePaths,
 		ExcludeRegexes: s.cfg.ExcludeRegexes,
 		JobID:          jobID,

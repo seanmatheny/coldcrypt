@@ -92,7 +92,8 @@ $EDITOR ~/.coldcrypt/secrets.json   # infrastructure settings
 
 At minimum set in **config.json**:
 - `remote_host`, `remote_user`, `remote_key_path`
-- `source_dirs` — list of directories to back up
+
+Directories to back up are configured per job in the web UI (Jobs tab).
 
 At minimum set in **secrets.json**:
 - `passphrase` — replace the placeholder with a strong passphrase (or use `passphrase_file`)
@@ -132,7 +133,6 @@ not manage this file if users will also change settings through the web UI.
 | `remote_key_path` | — | Path to SSH private key |
 | `remote_password` | — | SSH password (if not using key) |
 | `remote_base_path` | `/backup/coldcrypt` | Base directory on remote server |
-| `source_dirs` | `[]` | Directories to back up |
 | `exclude_paths` | `[]` | Absolute paths to exclude (and their descendants) |
 | `exclude_regexes` | `[]` | Regular expressions matched against source paths to exclude files/directories |
 | `deleted_retention_enabled` | `false` | Retain files deleted at source before automatic purge |
@@ -180,8 +180,8 @@ coldcrypt serve [--config path] [--secrets-config path]
     Start the web server and cron scheduler.
     Searches for config.json in: ./config.json, ~/.coldcrypt/config.json, /etc/coldcrypt/config.json
 
-coldcrypt backup [--config path] [--secrets-config path] [dir1 dir2 ...]
-    Run a one-off backup. Uses source_dirs from config if no dirs specified.
+coldcrypt backup [--config path] [--secrets-config path] dir1 [dir2 ...]
+    Run a one-off backup of the given directories.
 
 coldcrypt purge [--config path] [--secrets-config path] [--path <display-prefix>] [--yes]
     Permanently delete backed-up blobs from the remote server and clear matching
@@ -286,7 +286,7 @@ sudo mkdir -p /etc/coldcrypt
 sudo coldcrypt init /var/lib/coldcrypt
 sudo cp /var/lib/coldcrypt/config.json /etc/coldcrypt/config.json
 sudo cp /var/lib/coldcrypt/secrets.json /etc/coldcrypt/secrets.json
-# Edit /etc/coldcrypt/config.json — set remote_host, remote_user, source_dirs, etc.
+# Edit /etc/coldcrypt/config.json — set remote_host, remote_user, etc.
 # Edit /etc/coldcrypt/secrets.json — set data_dir to /var/lib/coldcrypt, passphrase, etc.
 sudo chown -R coldcrypt:coldcrypt /etc/coldcrypt
 sudo chmod 700 /etc/coldcrypt

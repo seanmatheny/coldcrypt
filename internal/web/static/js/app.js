@@ -110,8 +110,8 @@ function navigateTo(section) {
     el.classList.toggle('active', el.id === `section-${section}`);
   });
   const names = {
-    dashboard: 'Dashboard', files: 'Files', jobs: 'Jobs',
-    schedules: 'Schedules', settings: 'Settings'
+    dashboard: 'Dashboard', files: 'Files', jobs: 'Activity',
+    schedules: 'Jobs', settings: 'Settings'
   };
   document.getElementById('topbar-section-name').textContent = names[section] || section;
 
@@ -138,11 +138,7 @@ function bindGlobal() {
   document.getElementById('logout-btn').addEventListener('click', logout);
 
   // Dashboard buttons
-  document.getElementById('dash-run-now').addEventListener('click', () => runBackupNow());
   document.getElementById('dash-refresh').addEventListener('click', loadDashboard);
-
-  // Jobs section run now
-  document.getElementById('jobs-run-now').addEventListener('click', () => runBackupNow());
 
   // Stop backup buttons
   document.getElementById('stop-job-btn').addEventListener('click', stopJob);
@@ -948,17 +944,21 @@ function drawRateGraph(canvas, samples) {
   ctx.fillText(fmtSize(currentRate) + '/s', W - pad, pad + Math.round(12 * dpr));
 }
 
-async function runBackupNow() {
+async function runScheduleNow(id) {
+  const schedules = await apiFetch('/api/schedules') || [];
+  const s = schedules.find(x => x.ID === id);
+  if (!s) return;
+
   const r = await fetch('/api/jobs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ source_dirs: [] })
+    body: JSON.stringify({ source_dirs: s.SourceDirs || [] })
   });
   if (r.ok) {
     const d = await r.json();
-    alert(`Backup job started (ID: ${d.job_id})`);
-    if (currentSection === 'jobs') loadJobs();
-    else if (currentSection === 'dashboard') loadDashboard();
+    alert(`Backup job started for "${s.Name}" (ID: ${d.job_id})`);
+    navigateTo('jobs');
+    loadJobs();
   } else {
     const d = await r.json().catch(() => ({ error: 'Unknown error' }));
     alert('Error: ' + (d.error || 'Failed to start backup'));
@@ -985,7 +985,7 @@ async function loadSchedules() {
   container.innerHTML = '';
 
   if (schedules.length === 0) {
-    container.innerHTML = '<div class="text-muted">No schedules configured. Click "Add Schedule" to create one.</div>';
+    container.innerHTML = '<div class="text-muted">No jobs configured. Click "Add Job" to create one.</div>';
     return;
   }
 
@@ -1002,11 +1002,14 @@ async function loadSchedules() {
             <i class="fa fa-clock me-1"></i><code>${esc(s.CronExpr)}</code>
           </div>
           <div class="text-muted small mb-1">
-            <i class="fa fa-folder me-1"></i>${(s.SourceDirs || []).map(d => esc(d)).join(', ') || '(configured source dirs)'}
+            <i class="fa fa-folder me-1"></i>${(s.SourceDirs || []).map(d => esc(d)).join(', ') || '(no source directories)'}
           </div>
           ${s.LastRunAt ? `<div class="text-muted small">Last run: ${fmtDate(s.LastRunAt)}</div>` : ''}
         </div>
         <div class="d-flex gap-2">
+          <button class="btn btn-sm btn-primary py-0 px-2 text-nowrap" onclick="runScheduleNow(${s.ID})" title="Run this backup now">
+            <i class="fa fa-play me-1"></i>Run Now
+          </button>
           <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="editSchedule(${s.ID})">
             <i class="fa fa-pencil"></i>
           </button>
@@ -1020,7 +1023,7 @@ async function loadSchedules() {
 }
 
 function openScheduleModal(scheduleData) {
-  document.getElementById('scheduleModalTitle').textContent = 'Add Schedule';
+  document.getElementById('scheduleModalTitle').textContent = 'Add Job';
   document.getElementById('sched-edit-id').value = '';
   document.getElementById('sched-name').value = '';
   document.getElementById('sched-cron').value = '';
@@ -1035,7 +1038,7 @@ async function editSchedule(id) {
   const s = schedules.find(x => x.ID === id);
   if (!s) return;
 
-  document.getElementById('scheduleModalTitle').textContent = 'Edit Schedule';
+  document.getElementById('scheduleModalTitle').textContent = 'Edit Job';
   document.getElementById('sched-edit-id').value = id;
   document.getElementById('sched-name').value = s.Name;
   document.getElementById('sched-cron').value = s.CronExpr;
@@ -1057,6 +1060,10 @@ async function saveSchedule() {
     showMsg('sched-msg', 'Name and cron expression are required.', 'danger');
     return;
   }
+  if (body.source_dirs.length === 0) {
+    showMsg('sched-msg', 'At least one source directory is required.', 'danger');
+    return;
+  }
 
   const url  = id ? `/api/schedules/${id}` : '/api/schedules';
   const method = id ? 'PUT' : 'POST';
@@ -1076,7 +1083,7 @@ async function saveSchedule() {
 }
 
 async function deleteSchedule(id) {
-  if (!confirm('Delete this schedule?')) return;
+  if (!confirm('Delete this job?')) return;
   const r = await fetch(`/api/schedules/${id}`, { method: 'DELETE' });
   if (r.ok) loadSchedules();
 }
@@ -1090,7 +1097,6 @@ async function loadSettings() {
   document.getElementById('cfg-remote-user').value = cfg.remote_user || '';
   document.getElementById('cfg-key-path').value    = cfg.remote_key_path || '';
   document.getElementById('cfg-remote-path').value = cfg.remote_base_path || '';
-  document.getElementById('cfg-source-dirs').value = (cfg.source_dirs || []).join('\n');
   document.getElementById('cfg-exclude-paths').value = (cfg.exclude_paths || []).join('\n');
   document.getElementById('cfg-exclude-regexes').value = (cfg.exclude_regexes || []).join('\n');
   document.getElementById('cfg-del-retain-enabled').checked = !!cfg.deleted_retention_enabled;
@@ -1119,7 +1125,6 @@ async function saveConfig() {
     remote_user:      document.getElementById('cfg-remote-user').value.trim(),
     remote_key_path:  document.getElementById('cfg-key-path').value.trim(),
     remote_base_path: document.getElementById('cfg-remote-path').value.trim(),
-    source_dirs:      document.getElementById('cfg-source-dirs').value.split('\n').map(s => s.trim()).filter(Boolean),
     exclude_paths:    document.getElementById('cfg-exclude-paths').value.split('\n').map(s => s.trim()).filter(Boolean),
     exclude_regexes:  document.getElementById('cfg-exclude-regexes').value.split('\n').map(s => s.trim()).filter(Boolean),
     deleted_retention_enabled: document.getElementById('cfg-del-retain-enabled').checked,

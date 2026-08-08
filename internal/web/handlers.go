@@ -285,9 +285,6 @@ func (h *handlers) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 	dirs := body.SourceDirs
 	if len(dirs) == 0 {
-		dirs = h.cfg.SourceDirs
-	}
-	if len(dirs) == 0 {
 		writeError(w, http.StatusBadRequest, "no source directories specified")
 		return
 	}
@@ -527,6 +524,10 @@ func (h *handlers) handleCreateSchedule(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "name and cron_expr are required")
 		return
 	}
+	if len(body.SourceDirs) == 0 {
+		writeError(w, http.StatusBadRequest, "at least one source directory is required")
+		return
+	}
 	if err := scheduler.ValidateCronExpr(body.CronExpr); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid cron expression %q: %v", body.CronExpr, err))
 		return
@@ -559,6 +560,10 @@ func (h *handlers) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, 
 	}
 	if body.Name == "" || body.CronExpr == "" {
 		writeError(w, http.StatusBadRequest, "name and cron_expr are required")
+		return
+	}
+	if len(body.SourceDirs) == 0 {
+		writeError(w, http.StatusBadRequest, "at least one source directory is required")
 		return
 	}
 	if err := scheduler.ValidateCronExpr(body.CronExpr); err != nil {
@@ -600,7 +605,6 @@ func (h *handlers) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"remote_key_path":           h.cfg.RemoteKeyPath,
 		"remote_password":           maskSecret(h.cfg.RemotePassword),
 		"remote_base_path":          h.cfg.RemoteBasePath,
-		"source_dirs":               h.cfg.SourceDirs,
 		"exclude_paths":             h.cfg.ExcludePaths,
 		"exclude_regexes":           h.cfg.ExcludeRegexes,
 		"deleted_retention_enabled": h.cfg.DeletedRetentionEnabled,
@@ -623,7 +627,6 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		RemoteKeyPath           string   `json:"remote_key_path"`
 		RemotePassword          string   `json:"remote_password"`
 		RemoteBasePath          string   `json:"remote_base_path"`
-		SourceDirs              []string `json:"source_dirs"`
 		ExcludePaths            []string `json:"exclude_paths"`
 		ExcludeRegexes          []string `json:"exclude_regexes"`
 		DeletedRetentionEnabled bool     `json:"deleted_retention_enabled"`
@@ -665,9 +668,6 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.RemoteBasePath != "" {
 		h.cfg.RemoteBasePath = body.RemoteBasePath
-	}
-	if body.SourceDirs != nil {
-		h.cfg.SourceDirs = body.SourceDirs
 	}
 	if body.ExcludePaths != nil {
 		h.cfg.ExcludePaths = body.ExcludePaths

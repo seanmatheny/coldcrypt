@@ -131,7 +131,6 @@ func cmdInit(args []string) {
 		RemoteUser:     "backup",
 		RemoteKeyPath:  filepath.Join(os.Getenv("HOME"), ".ssh", "id_ed25519"),
 		RemoteBasePath: "/backup/coldcrypt",
-		SourceDirs:     []string{},
 		WebPort:        8443,
 		DataDir:        dataDir,
 		KeySalt:        salt,
@@ -157,7 +156,6 @@ Secrets file   : %s
 Next steps:
   1. Edit %s (UI-editable settings):
      - Set remote_host, remote_user, remote_key_path
-     - Set source_dirs to the directories you want to back up
 
   2. Edit %s (infrastructure/puppet-managed settings):
      - Replace the passphrase with a strong one (or use passphrase_file)
@@ -251,10 +249,7 @@ func cmdBackup(args []string) {
 	}
 
 	if len(dirs) == 0 {
-		dirs = cfg.SourceDirs
-	}
-	if len(dirs) == 0 {
-		log.Fatalf("no source directories specified (pass dirs as arguments or set source_dirs in config)")
+		log.Fatalf("no source directories specified (pass dirs as arguments)")
 	}
 
 	jobID, err := database.CreateJob()
