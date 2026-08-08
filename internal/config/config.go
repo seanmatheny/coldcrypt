@@ -21,7 +21,6 @@ type Config struct {
 	RemoteKeyPath  string   `json:"remote_key_path"`
 	RemotePassword string   `json:"remote_password,omitempty"`
 	RemoteBasePath string   `json:"remote_base_path"`
-	SourceDirs     []string `json:"source_dirs"`
 	ExcludePaths   []string `json:"exclude_paths,omitempty"`
 	ExcludeRegexes []string `json:"exclude_regexes,omitempty"`
 	// Optional deleted-source retention. When enabled, files missing from the
@@ -165,7 +164,6 @@ func SaveUI(cfg *Config, path string) error {
 		RemoteKeyPath           string   `json:"remote_key_path"`
 		RemotePassword          string   `json:"remote_password,omitempty"`
 		RemoteBasePath          string   `json:"remote_base_path"`
-		SourceDirs              []string `json:"source_dirs"`
 		ExcludePaths            []string `json:"exclude_paths,omitempty"`
 		ExcludeRegexes          []string `json:"exclude_regexes,omitempty"`
 		DeletedRetentionEnabled bool     `json:"deleted_retention_enabled,omitempty"`
@@ -182,7 +180,6 @@ func SaveUI(cfg *Config, path string) error {
 		RemoteKeyPath:           cfg.RemoteKeyPath,
 		RemotePassword:          cfg.RemotePassword,
 		RemoteBasePath:          cfg.RemoteBasePath,
-		SourceDirs:              cfg.SourceDirs,
 		ExcludePaths:            cfg.ExcludePaths,
 		ExcludeRegexes:          cfg.ExcludeRegexes,
 		DeletedRetentionEnabled: cfg.DeletedRetentionEnabled,
