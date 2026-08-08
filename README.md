@@ -253,11 +253,11 @@ sudo chown -R coldcrypt:coldcrypt /var/lib/coldcrypt
 
 After signing in at `http(s)://localhost:8443`:
 
-- **Dashboard** — overview stats, recent jobs, "Run Backup Now" button
+- **Dashboard** — overview stats and recent jobs
 - **Files** — searchable pseudo-filesystem browser; click "Versions" on any file to see its backup history and trigger a restore; click "Restore" on a directory to restore all its files; click "Purge" on a directory (or "Purge All" in the header) to permanently delete its backed-up blobs
-- **Jobs** — backup and restore job history with status badges (green=completed, yellow=running, red=failed); auto-refreshes for running jobs and shows active transfer progress
-- **Schedules** — add/edit/delete cron-based schedules; examples provided for common intervals
-- **Settings** — edit remote server config, source directories, and change the web UI password
+- **Jobs** — add/edit/delete cron-based backup jobs, each with its own source directories; every job card has a "Run Now" button to run it immediately
+- **Activity** — backup and restore job history with status badges (green=completed, yellow=running, red=failed); auto-refreshes for running jobs and shows active transfer progress
+- **Settings** — edit remote server config, exclusions, and change the web UI password
 
 ---
 
@@ -327,6 +327,59 @@ ReadOnlyPaths=/home /srv/data
 # Allow restoring into custom writable destinations.
 ReadWritePaths=/Restore /mnt/restore-target
 ```
+
+### Granting read access to backup sources
+
+The service runs as the unprivileged `coldcrypt` user, so every file you back
+up must be readable by that user, and every directory on the path to it must be
+traversable (execute bit). A `permission denied` error on a job usually means
+the source files are owned by another user (e.g. `root` or an application user
+like `jellyfin`) with restrictive modes.
+
+The recommended fix is a POSIX ACL — it grants `coldcrypt` read access without
+changing the files' owner or loosening permissions for anyone else:
+
+```bash
+# Grant read on existing files and traverse on existing directories.
+sudo setfacl -R -m u:coldcrypt:rX /var/backups/jellyfin
+```
+
+```bash
+# Also set a default ACL so files created there in the future (e.g. nightly
+# dumps) are readable by coldcrypt too.
+sudo setfacl -R -m d:u:coldcrypt:rX /var/backups/jellyfin
+```
+
+Verify access as the service user before re-running the job:
+
+```bash
+sudo -u coldcrypt find /var/backups/jellyfin ! -readable
+```
+
+Any paths this prints are still unreadable; no output means you are good to go.
+
+Alternatively, if the source files are already group-readable, add `coldcrypt`
+to the owning group instead (group changes only take effect after a service
+restart):
+
+```bash
+sudo usermod -aG jellyfin coldcrypt
+sudo systemctl restart coldcrypt
+```
+
+Caveats:
+
+- ACLs require filesystem support; ext4 and XFS have it enabled by default.
+  The `setfacl` tool comes from the `acl` package on Debian/Ubuntu.
+- If an application explicitly writes its files with mode `0600` (common for
+  database dumps), that chmod overrides the inherited default ACL's mask and
+  the files stay unreadable — both for ACLs and the group approach. In that
+  case configure the producing application to write group-readable files, or
+  re-run the `setfacl -R -m u:coldcrypt:rX` command from a cron job or timer
+  before the backup runs.
+- Remember `ProtectSystem=strict` in the unit file: source directories outside
+  the paths systemd already allows must also be listed in `ReadOnlyPaths=`
+  (see step 4). Both the sandbox and Unix permissions have to allow access.
 
 ### 5. View logs
 
