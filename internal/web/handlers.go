@@ -527,13 +527,19 @@ func (h *handlers) handleCreateSchedule(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "name and cron_expr are required")
 		return
 	}
+	if err := scheduler.ValidateCronExpr(body.CronExpr); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid cron expression %q: %v", body.CronExpr, err))
+		return
+	}
 	sched, err := h.db.CreateSchedule(body.Name, body.CronExpr, body.SourceDirs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if h.sched != nil {
-		_ = h.sched.Reload()
+		if err := h.sched.Reload(); err != nil {
+			log.Printf("config reload schedules: %v", err)
+		}
 	}
 	writeJSON(w, http.StatusCreated, sched)
 }
@@ -549,6 +555,14 @@ func (h *handlers) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, 
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.Name == "" || body.CronExpr == "" {
+		writeError(w, http.StatusBadRequest, "name and cron_expr are required")
+		return
+	}
+	if err := scheduler.ValidateCronExpr(body.CronExpr); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid cron expression %q: %v", body.CronExpr, err))
 		return
 	}
 	if err := h.db.UpdateSchedule(id, body.Name, body.CronExpr, body.SourceDirs, body.Enabled); err != nil {
@@ -570,7 +584,9 @@ func (h *handlers) handleDeleteSchedule(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if h.sched != nil {
-		_ = h.sched.Reload()
+		if err := h.sched.Reload(); err != nil {
+			log.Printf("config reload schedules: %v", err)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -621,6 +637,17 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	scanCron := strings.TrimSpace(body.IntegrityScanCronExpr)
+	if body.IntegrityScanEnabled && scanCron == "" {
+		writeError(w, http.StatusBadRequest, "integrity scan is enabled but no cron expression is set")
+		return
+	}
+	if scanCron != "" {
+		if err := scheduler.ValidateCronExpr(scanCron); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid integrity scan cron expression %q: %v", scanCron, err))
+			return
+		}
+	}
 	if body.RemoteHost != "" {
 		h.cfg.RemoteHost = body.RemoteHost
 	}
@@ -657,7 +684,7 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	h.cfg.CompressionEnabled = body.CompressionEnabled
 	h.cfg.IntegrityScanEnabled = body.IntegrityScanEnabled
-	h.cfg.IntegrityScanCronExpr = strings.TrimSpace(body.IntegrityScanCronExpr)
+	h.cfg.IntegrityScanCronExpr = scanCron
 
 	// On the first UI save after migrating from a single-file config, create
 	// secrets.json so that infrastructure fields are not lost when config.json
@@ -676,7 +703,9 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.sched != nil {
-		_ = h.sched.Reload()
+		if err := h.sched.Reload(); err != nil {
+			log.Printf("config reload schedules: %v", err)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

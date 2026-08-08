@@ -25,6 +25,14 @@ type Scheduler struct {
 	scanID   cronv3.EntryID
 }
 
+// ValidateCronExpr checks expr against the same parser the scheduler uses,
+// so that invalid expressions can be rejected at save time instead of failing
+// silently when the schedule is loaded.
+func ValidateCronExpr(expr string) error {
+	_, err := cronv3.ParseStandard(expr)
+	return err
+}
+
 // New creates a new Scheduler.
 func New(database *db.DB, a *agent.Agent, cfg *config.Config) *Scheduler {
 	return &Scheduler{
