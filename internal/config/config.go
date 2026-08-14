@@ -20,22 +20,22 @@ type Config struct {
 	RemoteUser     string   `json:"remote_user"`
 	RemoteKeyPath  string   `json:"remote_key_path"`
 	RemotePassword string   `json:"remote_password,omitempty"`
-	RemoteBasePath string   `json:"remote_base_path"`
-	ExcludePaths   []string `json:"exclude_paths,omitempty"`
-	ExcludeRegexes []string `json:"exclude_regexes,omitempty"`
-	// Optional deleted-source retention. When enabled, files missing from the
-	// source are retained for the configured value/unit before automatic purge.
-	DeletedRetentionEnabled bool   `json:"deleted_retention_enabled,omitempty"`
-	DeletedRetentionValue   int    `json:"deleted_retention_value,omitempty"`
-	DeletedRetentionUnit    string `json:"deleted_retention_unit,omitempty"` // "days" or "weeks"
+	RemoteBasePath string `json:"remote_base_path"`
 
-	// CompressionEnabled enables gzip compression of file content before
-	// encryption. Existing uncompressed backups remain fully restorable;
-	// the format is detected automatically at restore time.
-	CompressionEnabled bool `json:"compression_enabled,omitempty"`
-
-	IntegrityScanEnabled  bool   `json:"integrity_scan_enabled,omitempty"`
-	IntegrityScanCronExpr string `json:"integrity_scan_cron_expr,omitempty"`
+	// Legacy per-job settings. Backup job settings (excludes, deleted-source
+	// retention, compression, integrity scan) now live on each schedule in the
+	// database. These fields are still parsed from config.json so existing
+	// installs can seed their schedules on first startup after upgrading (see
+	// db.SeedScheduleJobSettings), and so the `coldcrypt backup` CLI keeps
+	// honouring them for one-off runs. They are no longer written by SaveUI.
+	ExcludePaths            []string `json:"exclude_paths,omitempty"`
+	ExcludeRegexes          []string `json:"exclude_regexes,omitempty"`
+	DeletedRetentionEnabled bool     `json:"deleted_retention_enabled,omitempty"`
+	DeletedRetentionValue   int      `json:"deleted_retention_value,omitempty"`
+	DeletedRetentionUnit    string   `json:"deleted_retention_unit,omitempty"` // "days" or "weeks"
+	CompressionEnabled      bool     `json:"compression_enabled,omitempty"`
+	IntegrityScanEnabled    bool     `json:"integrity_scan_enabled,omitempty"`
+	IntegrityScanCronExpr   string   `json:"integrity_scan_cron_expr,omitempty"`
 
 	// Infrastructure fields — stored in secrets.json (puppet-managed).
 	// These fields are never read or written by the web UI.
@@ -158,36 +158,20 @@ func applySecrets(cfg *Config, sec *SecretsConfig) {
 // overwritten by web UI saves.
 func SaveUI(cfg *Config, path string) error {
 	type uiFields struct {
-		RemoteHost              string   `json:"remote_host"`
-		RemotePort              int      `json:"remote_port"`
-		RemoteUser              string   `json:"remote_user"`
-		RemoteKeyPath           string   `json:"remote_key_path"`
-		RemotePassword          string   `json:"remote_password,omitempty"`
-		RemoteBasePath          string   `json:"remote_base_path"`
-		ExcludePaths            []string `json:"exclude_paths,omitempty"`
-		ExcludeRegexes          []string `json:"exclude_regexes,omitempty"`
-		DeletedRetentionEnabled bool     `json:"deleted_retention_enabled,omitempty"`
-		DeletedRetentionValue   int      `json:"deleted_retention_value,omitempty"`
-		DeletedRetentionUnit    string   `json:"deleted_retention_unit,omitempty"`
-		CompressionEnabled      bool     `json:"compression_enabled,omitempty"`
-		IntegrityScanEnabled    bool     `json:"integrity_scan_enabled,omitempty"`
-		IntegrityScanCronExpr   string   `json:"integrity_scan_cron_expr,omitempty"`
+		RemoteHost     string `json:"remote_host"`
+		RemotePort     int    `json:"remote_port"`
+		RemoteUser     string `json:"remote_user"`
+		RemoteKeyPath  string `json:"remote_key_path"`
+		RemotePassword string `json:"remote_password,omitempty"`
+		RemoteBasePath string `json:"remote_base_path"`
 	}
 	ui := uiFields{
-		RemoteHost:              cfg.RemoteHost,
-		RemotePort:              cfg.RemotePort,
-		RemoteUser:              cfg.RemoteUser,
-		RemoteKeyPath:           cfg.RemoteKeyPath,
-		RemotePassword:          cfg.RemotePassword,
-		RemoteBasePath:          cfg.RemoteBasePath,
-		ExcludePaths:            cfg.ExcludePaths,
-		ExcludeRegexes:          cfg.ExcludeRegexes,
-		DeletedRetentionEnabled: cfg.DeletedRetentionEnabled,
-		DeletedRetentionValue:   cfg.DeletedRetentionValue,
-		DeletedRetentionUnit:    cfg.DeletedRetentionUnit,
-		CompressionEnabled:      cfg.CompressionEnabled,
-		IntegrityScanEnabled:    cfg.IntegrityScanEnabled,
-		IntegrityScanCronExpr:   cfg.IntegrityScanCronExpr,
+		RemoteHost:     cfg.RemoteHost,
+		RemotePort:     cfg.RemotePort,
+		RemoteUser:     cfg.RemoteUser,
+		RemoteKeyPath:  cfg.RemoteKeyPath,
+		RemotePassword: cfg.RemotePassword,
+		RemoteBasePath: cfg.RemoteBasePath,
 	}
 	data, err := json.MarshalIndent(ui, "", "  ")
 	if err != nil {

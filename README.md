@@ -80,7 +80,7 @@ go build ./cmd/coldcrypt/
 ```
 
 This creates two files:
-- `~/.coldcrypt/config.json` — UI-editable settings (remote server, source directories, retention policy)
+- `~/.coldcrypt/config.json` — UI-editable settings (remote server connection)
 - `~/.coldcrypt/secrets.json` — infrastructure/puppet-managed settings (passphrase, key salt, web port, TLS, ntfy topic)
 
 ### 2. Edit the config files
@@ -133,11 +133,13 @@ not manage this file if users will also change settings through the web UI.
 | `remote_key_path` | — | Path to SSH private key |
 | `remote_password` | — | SSH password (if not using key) |
 | `remote_base_path` | `/backup/coldcrypt` | Base directory on remote server |
-| `exclude_paths` | `[]` | Absolute paths to exclude (and their descendants) |
-| `exclude_regexes` | `[]` | Regular expressions matched against source paths to exclude files/directories |
-| `deleted_retention_enabled` | `false` | Retain files deleted at source before automatic purge |
-| `deleted_retention_value` | `0` | Retention duration value |
-| `deleted_retention_unit` | `"days"` | Retention duration unit (`"days"` or `"weeks"`) |
+
+Backup job settings — exclude paths, exclude regexes, deleted-source
+retention, compression, and integrity scans — are configured **per job** in
+the web UI's Jobs tab and stored in the database, not in `config.json`.
+Legacy global values for these keys are still read once on upgrade and copied
+onto every existing job, and the `coldcrypt backup` CLI continues to honour
+them for one-off runs.
 
 ### `secrets.json` — infrastructure/puppet-managed settings
 

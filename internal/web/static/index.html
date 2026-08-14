@@ -568,56 +568,11 @@
                 <label class="form-label small">Remote Base Path</label>
                 <input type="text" id="cfg-remote-path" class="form-control form-control-sm" />
               </div>
-              <h6 class="mb-2 text-muted mt-3">Exclude Paths</h6>
-              <div class="mb-2">
-                <textarea id="cfg-exclude-paths" class="form-control form-control-sm" rows="3"
-                  placeholder="One path per line (e.g. /home/user/Downloads)"></textarea>
-              </div>
-              <h6 class="mb-2 text-muted mt-3">Exclude Regex</h6>
-              <div class="mb-2">
-                <textarea id="cfg-exclude-regexes" class="form-control form-control-sm" rows="3"
-                  placeholder="One regular expression per line (matches source path)"></textarea>
-              </div>
-              <h6 class="mb-2 text-muted mt-3">Deleted Source Retention</h6>
-              <div class="form-check mb-2">
-                <input class="form-check-input" type="checkbox" id="cfg-del-retain-enabled">
-                <label class="form-check-label small" for="cfg-del-retain-enabled">
-                  Retain files deleted at source, then purge automatically
-                </label>
-              </div>
-              <div class="d-flex gap-2 align-items-center mb-2">
-                <input type="number" min="0" id="cfg-del-retain-value" class="form-control form-control-sm" style="max-width:110px;" />
-                <select id="cfg-del-retain-unit" class="form-select form-select-sm" style="max-width:120px;">
-                  <option value="days">Days</option>
-                  <option value="weeks">Weeks</option>
-                </select>
-              </div>
-              <h6 class="mb-2 text-muted mt-3">Compression</h6>
-              <div class="form-check mb-2">
-                <input class="form-check-input" type="checkbox" id="cfg-compression-enabled">
-                <label class="form-check-label small" for="cfg-compression-enabled">
-                  Enable gzip compression before encryption
-                </label>
-              </div>
-              <div class="text-muted small mb-2">
-                Applies to new backups only. Existing uncompressed backups remain fully restorable.
-              </div>
-              <h6 class="mb-2 text-muted mt-3">Integrity Scan</h6>
-              <div class="form-check mb-2">
-                <input class="form-check-input" type="checkbox" id="cfg-scan-enabled">
-                <label class="form-check-label small" for="cfg-scan-enabled">
-                  Enable scheduled integrity scan
-                </label>
-              </div>
-              <div class="mb-2">
-                <label class="form-label small">Schedule (cron expression)</label>
-                <input type="text" id="cfg-scan-cron" class="form-control form-control-sm" placeholder="0 3 * * 0" />
-                <div id="cfg-scan-hint" class="text-muted small mt-1">e.g. 0 3 * * 0 (weekly at 3am Sunday)</div>
+              <div class="text-muted small mb-3">
+                Backup settings (exclusions, retention, compression, integrity scans) are
+                configured per job in the <strong>Jobs</strong> tab.
               </div>
               <div class="d-flex gap-2 mt-2">
-                <button class="btn btn-outline-warning btn-sm" id="cfg-run-scan-now">
-                  <i class="fa fa-shield-halved me-1"></i>Run Scan Now
-                </button>
                 <button class="btn btn-primary btn-sm" id="cfg-save-btn">
                   <i class="fa fa-save me-1"></i>Save Config
                 </button>
@@ -694,7 +649,7 @@
 
 <!-- Schedule Modal -->
 <div class="modal fade" id="scheduleModal" tabindex="-1">
-  <div class="modal-dialog">
+  <div class="modal-dialog modal-dialog-scrollable">
     <div class="modal-content" style="background:#161b22;border:1px solid #30363d;">
       <div class="modal-header border-0">
         <h5 class="modal-title" id="scheduleModalTitle">Add Job</h5>
@@ -723,6 +678,54 @@
           <input class="form-check-input" type="checkbox" id="sched-enabled" checked />
           <label class="form-check-label small" for="sched-enabled">Enabled</label>
         </div>
+
+        <h6 class="mb-2 text-muted mt-3">Exclude Paths</h6>
+        <div class="mb-2">
+          <textarea id="sched-exclude-paths" class="form-control form-control-sm" rows="2"
+            placeholder="One path per line (e.g. /home/user/Downloads)"></textarea>
+        </div>
+        <h6 class="mb-2 text-muted mt-3">Exclude Regex</h6>
+        <div class="mb-2">
+          <textarea id="sched-exclude-regexes" class="form-control form-control-sm" rows="2"
+            placeholder="One regular expression per line (matches source path)"></textarea>
+        </div>
+        <h6 class="mb-2 text-muted mt-3">Deleted Source Retention</h6>
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" id="sched-del-retain-enabled">
+          <label class="form-check-label small" for="sched-del-retain-enabled">
+            Retain files deleted at source, then purge automatically
+          </label>
+        </div>
+        <div class="d-flex gap-2 align-items-center mb-2">
+          <input type="number" min="0" id="sched-del-retain-value" class="form-control form-control-sm" style="max-width:110px;" />
+          <select id="sched-del-retain-unit" class="form-select form-select-sm" style="max-width:120px;">
+            <option value="days">Days</option>
+            <option value="weeks">Weeks</option>
+          </select>
+        </div>
+        <h6 class="mb-2 text-muted mt-3">Compression</h6>
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" id="sched-compression-enabled">
+          <label class="form-check-label small" for="sched-compression-enabled">
+            Enable gzip compression before encryption
+          </label>
+        </div>
+        <div class="text-muted small mb-2">
+          Applies to new backups only. Existing uncompressed backups remain fully restorable.
+        </div>
+        <h6 class="mb-2 text-muted mt-3">Integrity Scan</h6>
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" id="sched-scan-enabled">
+          <label class="form-check-label small" for="sched-scan-enabled">
+            Enable scheduled integrity scan for this job's files
+          </label>
+        </div>
+        <div class="mb-2">
+          <label class="form-label small">Scan Schedule (cron expression)</label>
+          <input type="text" id="sched-scan-cron" class="form-control form-control-sm" placeholder="0 3 * * 0" />
+          <div id="sched-scan-hint" class="text-muted small mt-1">e.g. 0 3 * * 0 (weekly at 3am Sunday)</div>
+        </div>
+
         <div id="sched-msg" class="small d-none mt-2"></div>
       </div>
       <div class="modal-footer border-0">

@@ -17,7 +17,11 @@ import (
 const scanWorkers = 4
 const maxInconsistencyPathListLength = 800
 
-func (a *Agent) RunScan(ctx context.Context, jobID int64) error {
+// RunScan verifies backed-up blobs against their recorded hashes. When
+// sourceDirs is non-empty the scan is scoped to files whose source path lies
+// within one of those directories (per-job scan); an empty slice scans the
+// whole archive.
+func (a *Agent) RunScan(ctx context.Context, jobID int64, sourceDirs []string) error {
 	if !atomic.CompareAndSwapInt32(&a.scanRunning, 0, 1) {
 		return ErrScanAlreadyRunning
 	}
@@ -49,6 +53,15 @@ func (a *Agent) RunScan(ctx context.Context, jobID int64) error {
 	entries, err := a.db.ListLatestVersionsForScan()
 	if err != nil {
 		return fmt.Errorf("list scan entries: %w", err)
+	}
+	if len(sourceDirs) > 0 {
+		scoped := entries[:0]
+		for _, e := range entries {
+			if isWithinSourceDirs(e.SourcePath, sourceDirs) {
+				scoped = append(scoped, e)
+			}
+		}
+		entries = scoped
 	}
 	atomic.StoreInt64(&a.scanTotal, int64(len(entries)))
 

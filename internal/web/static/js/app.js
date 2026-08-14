@@ -175,9 +175,10 @@ function bindGlobal() {
   // Settings save / password change
   document.getElementById('cfg-save-btn').addEventListener('click', saveConfig);
   document.getElementById('cfg-pwd-btn').addEventListener('click', changePassword);
-  document.getElementById('cfg-del-retain-enabled').addEventListener('change', toggleDeletedRetentionFields);
-  document.getElementById('cfg-scan-enabled').addEventListener('change', toggleIntegrityScanFields);
-  document.getElementById('cfg-run-scan-now').addEventListener('click', runScanNow);
+
+  // Per-job settings toggles in the schedule modal
+  document.getElementById('sched-del-retain-enabled').addEventListener('change', toggleDeletedRetentionFields);
+  document.getElementById('sched-scan-enabled').addEventListener('change', toggleIntegrityScanFields);
 }
 
 // ── Dashboard ──────────────────────────────────────────────────────────────
@@ -945,18 +946,14 @@ function drawRateGraph(canvas, samples) {
 }
 
 async function runScheduleNow(id) {
-  const schedules = await apiFetch('/api/schedules') || [];
-  const s = schedules.find(x => x.ID === id);
-  if (!s) return;
-
   const r = await fetch('/api/jobs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ source_dirs: s.SourceDirs || [] })
+    body: JSON.stringify({ schedule_id: id })
   });
   if (r.ok) {
     const d = await r.json();
-    alert(`Backup job started for "${s.Name}" (ID: ${d.job_id})`);
+    alert(`Backup job started (ID: ${d.job_id})`);
     navigateTo('jobs');
     loadJobs();
   } else {
@@ -965,8 +962,8 @@ async function runScheduleNow(id) {
   }
 }
 
-async function runScanNow() {
-  const r = await fetch('/api/scan', { method: 'POST' });
+async function runScheduleScan(id) {
+  const r = await fetch(`/api/schedules/${id}/scan`, { method: 'POST' });
   if (r.ok) {
     const d = await r.json();
     alert(`Integrity scan started (ID: ${d.job_id})`);
@@ -992,6 +989,19 @@ async function loadSchedules() {
   schedules.forEach(s => {
     const card = document.createElement('div');
     card.className = 'stat-card mb-3';
+
+    // Per-job settings summary badges.
+    const tags = [];
+    const nExcl = (s.ExcludePaths || []).length + (s.ExcludeRegexes || []).length;
+    if (nExcl > 0) tags.push(`<span class="badge bg-secondary me-1">${nExcl} exclusion${nExcl === 1 ? '' : 's'}</span>`);
+    if (s.DeletedRetentionEnabled) {
+      tags.push(`<span class="badge bg-secondary me-1">retain deleted ${s.DeletedRetentionValue} ${esc(s.DeletedRetentionUnit || 'days')}</span>`);
+    }
+    if (s.CompressionEnabled) tags.push('<span class="badge bg-secondary me-1">gzip</span>');
+    if (s.IntegrityScanEnabled && s.IntegrityScanCronExpr) {
+      tags.push(`<span class="badge bg-secondary me-1">scan <code>${esc(s.IntegrityScanCronExpr)}</code></span>`);
+    }
+
     card.innerHTML = `
       <div class="d-flex align-items-start justify-content-between">
         <div>
@@ -1004,11 +1014,15 @@ async function loadSchedules() {
           <div class="text-muted small mb-1">
             <i class="fa fa-folder me-1"></i>${(s.SourceDirs || []).map(d => esc(d)).join(', ') || '(no source directories)'}
           </div>
+          ${tags.length ? `<div class="small mb-1">${tags.join('')}</div>` : ''}
           ${s.LastRunAt ? `<div class="text-muted small">Last run: ${fmtDate(s.LastRunAt)}</div>` : ''}
         </div>
         <div class="d-flex gap-2">
           <button class="btn btn-sm btn-primary py-0 px-2 text-nowrap" onclick="runScheduleNow(${s.ID})" title="Run this backup now">
             <i class="fa fa-play me-1"></i>Run Now
+          </button>
+          <button class="btn btn-sm btn-outline-warning py-0 px-2 text-nowrap" onclick="runScheduleScan(${s.ID})" title="Verify this job's backed-up files now">
+            <i class="fa fa-shield-halved me-1"></i>Scan Now
           </button>
           <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="editSchedule(${s.ID})">
             <i class="fa fa-pencil"></i>
@@ -1029,6 +1043,16 @@ function openScheduleModal(scheduleData) {
   document.getElementById('sched-cron').value = '';
   document.getElementById('sched-dirs').value = '';
   document.getElementById('sched-enabled').checked = true;
+  document.getElementById('sched-exclude-paths').value = '';
+  document.getElementById('sched-exclude-regexes').value = '';
+  document.getElementById('sched-del-retain-enabled').checked = false;
+  document.getElementById('sched-del-retain-value').value = 14;
+  document.getElementById('sched-del-retain-unit').value = 'days';
+  document.getElementById('sched-compression-enabled').checked = false;
+  document.getElementById('sched-scan-enabled').checked = false;
+  document.getElementById('sched-scan-cron').value = '';
+  toggleDeletedRetentionFields();
+  toggleIntegrityScanFields();
   document.getElementById('sched-msg').classList.add('d-none');
   scheduleModal.show();
 }
@@ -1044,6 +1068,16 @@ async function editSchedule(id) {
   document.getElementById('sched-cron').value = s.CronExpr;
   document.getElementById('sched-dirs').value = (s.SourceDirs || []).join('\n');
   document.getElementById('sched-enabled').checked = s.Enabled;
+  document.getElementById('sched-exclude-paths').value = (s.ExcludePaths || []).join('\n');
+  document.getElementById('sched-exclude-regexes').value = (s.ExcludeRegexes || []).join('\n');
+  document.getElementById('sched-del-retain-enabled').checked = !!s.DeletedRetentionEnabled;
+  document.getElementById('sched-del-retain-value').value = s.DeletedRetentionValue || 14;
+  document.getElementById('sched-del-retain-unit').value = s.DeletedRetentionUnit || 'days';
+  document.getElementById('sched-compression-enabled').checked = !!s.CompressionEnabled;
+  document.getElementById('sched-scan-enabled').checked = !!s.IntegrityScanEnabled;
+  document.getElementById('sched-scan-cron').value = s.IntegrityScanCronExpr || '';
+  toggleDeletedRetentionFields();
+  toggleIntegrityScanFields();
   document.getElementById('sched-msg').classList.add('d-none');
   scheduleModal.show();
 }
@@ -1054,7 +1088,15 @@ async function saveSchedule() {
     name: document.getElementById('sched-name').value.trim(),
     cron_expr: document.getElementById('sched-cron').value.trim(),
     source_dirs: document.getElementById('sched-dirs').value.split('\n').map(s => s.trim()).filter(Boolean),
-    enabled: document.getElementById('sched-enabled').checked
+    enabled: document.getElementById('sched-enabled').checked,
+    exclude_paths: document.getElementById('sched-exclude-paths').value.split('\n').map(s => s.trim()).filter(Boolean),
+    exclude_regexes: document.getElementById('sched-exclude-regexes').value.split('\n').map(s => s.trim()).filter(Boolean),
+    deleted_retention_enabled: document.getElementById('sched-del-retain-enabled').checked,
+    deleted_retention_value: Math.max(0, parseInt(document.getElementById('sched-del-retain-value').value, 10) || 0),
+    deleted_retention_unit: document.getElementById('sched-del-retain-unit').value,
+    compression_enabled: document.getElementById('sched-compression-enabled').checked,
+    integrity_scan_enabled: document.getElementById('sched-scan-enabled').checked,
+    integrity_scan_cron_expr: document.getElementById('sched-scan-cron').value.trim()
   };
   if (!body.name || !body.cron_expr) {
     showMsg('sched-msg', 'Name and cron expression are required.', 'danger');
@@ -1062,6 +1104,10 @@ async function saveSchedule() {
   }
   if (body.source_dirs.length === 0) {
     showMsg('sched-msg', 'At least one source directory is required.', 'danger');
+    return;
+  }
+  if (body.integrity_scan_enabled && !body.integrity_scan_cron_expr) {
+    showMsg('sched-msg', 'Integrity scan is enabled but no cron expression is set.', 'danger');
     return;
   }
 
@@ -1097,16 +1143,6 @@ async function loadSettings() {
   document.getElementById('cfg-remote-user').value = cfg.remote_user || '';
   document.getElementById('cfg-key-path').value    = cfg.remote_key_path || '';
   document.getElementById('cfg-remote-path').value = cfg.remote_base_path || '';
-  document.getElementById('cfg-exclude-paths').value = (cfg.exclude_paths || []).join('\n');
-  document.getElementById('cfg-exclude-regexes').value = (cfg.exclude_regexes || []).join('\n');
-  document.getElementById('cfg-del-retain-enabled').checked = !!cfg.deleted_retention_enabled;
-  document.getElementById('cfg-del-retain-value').value = cfg.deleted_retention_value || 14;
-  document.getElementById('cfg-del-retain-unit').value = cfg.deleted_retention_unit || 'days';
-  document.getElementById('cfg-compression-enabled').checked = !!cfg.compression_enabled;
-  document.getElementById('cfg-scan-enabled').checked = !!cfg.integrity_scan_enabled;
-  document.getElementById('cfg-scan-cron').value = cfg.integrity_scan_cron_expr || '';
-  toggleDeletedRetentionFields();
-  toggleIntegrityScanFields();
 
   try {
     const r = await fetch('/api/version');
@@ -1124,15 +1160,7 @@ async function saveConfig() {
     remote_port:      parseInt(document.getElementById('cfg-remote-port').value) || 22,
     remote_user:      document.getElementById('cfg-remote-user').value.trim(),
     remote_key_path:  document.getElementById('cfg-key-path').value.trim(),
-    remote_base_path: document.getElementById('cfg-remote-path').value.trim(),
-    exclude_paths:    document.getElementById('cfg-exclude-paths').value.split('\n').map(s => s.trim()).filter(Boolean),
-    exclude_regexes:  document.getElementById('cfg-exclude-regexes').value.split('\n').map(s => s.trim()).filter(Boolean),
-    deleted_retention_enabled: document.getElementById('cfg-del-retain-enabled').checked,
-    deleted_retention_value: Math.max(0, parseInt(document.getElementById('cfg-del-retain-value').value, 10) || 0),
-    deleted_retention_unit: document.getElementById('cfg-del-retain-unit').value,
-    compression_enabled: document.getElementById('cfg-compression-enabled').checked,
-    integrity_scan_enabled: document.getElementById('cfg-scan-enabled').checked,
-    integrity_scan_cron_expr: document.getElementById('cfg-scan-cron').value.trim()
+    remote_base_path: document.getElementById('cfg-remote-path').value.trim()
   };
   const r = await fetch('/api/config', {
     method: 'PUT',
@@ -1212,15 +1240,15 @@ function showMsg(elID, msg, type) {
 }
 
 function toggleDeletedRetentionFields() {
-  const enabled = document.getElementById('cfg-del-retain-enabled').checked;
-  document.getElementById('cfg-del-retain-value').disabled = !enabled;
-  document.getElementById('cfg-del-retain-unit').disabled = !enabled;
+  const enabled = document.getElementById('sched-del-retain-enabled').checked;
+  document.getElementById('sched-del-retain-value').disabled = !enabled;
+  document.getElementById('sched-del-retain-unit').disabled = !enabled;
 }
 
 function toggleIntegrityScanFields() {
-  const enabled = document.getElementById('cfg-scan-enabled').checked;
-  const cron = document.getElementById('cfg-scan-cron');
-  const hint = document.getElementById('cfg-scan-hint');
+  const enabled = document.getElementById('sched-scan-enabled').checked;
+  const cron = document.getElementById('sched-scan-cron');
+  const hint = document.getElementById('sched-scan-hint');
   if (cron) cron.disabled = !enabled;
   if (hint) hint.classList.toggle('d-none', !enabled);
 }

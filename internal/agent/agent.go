@@ -43,7 +43,14 @@ type BackupOptions struct {
 	SourceDirs     []string
 	ExcludePaths   []string
 	ExcludeRegexes []string
-	JobID          int64
+	// CompressionEnabled gzip-compresses file content before encryption.
+	// Existing uncompressed backups remain fully restorable; the format is
+	// detected automatically at restore time.
+	CompressionEnabled bool
+	// DeletedRetention, when > 0, retains files missing from the source for
+	// this duration before automatic purge. Zero disables the feature.
+	DeletedRetention time.Duration
+	JobID            int64
 }
 
 // Agent performs backup and restore operations.
@@ -429,8 +436,8 @@ func isWithinSourceDirs(path string, sourceDirs []string) bool {
 // applyDeletedSourceRetention marks missing files and purges expired retained
 // files when deleted-source retention is enabled.
 func (a *Agent) applyDeletedSourceRetention(ctx context.Context, opts BackupOptions, seenPaths map[string]struct{}, excludeRegex []*regexp.Regexp) (removed int, errs int) {
-	retention, ok := a.cfg.DeletedRetentionDuration()
-	if !ok {
+	retention := opts.DeletedRetention
+	if retention <= 0 {
 		return 0, 0
 	}
 	entries, err := a.db.ListFileLifecycleEntries()
@@ -585,7 +592,7 @@ func (a *Agent) processFile(ctx context.Context, client *transfer.Client, opts B
 	encErrCh := make(chan error, 1)
 	go func() {
 		var err error
-		if a.cfg.CompressionEnabled {
+		if opts.CompressionEnabled {
 			err = CompressAndEncryptFile(a.key, f, pw)
 		} else {
 			err = EncryptFile(a.key, f, pw)

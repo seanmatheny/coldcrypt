@@ -9,7 +9,7 @@ import (
 	"github.com/seanmatheny/coldcrypt/internal/db"
 )
 
-func newTestScheduler(t *testing.T, cfg *config.Config) (*Scheduler, *db.DB) {
+func newTestScheduler(t *testing.T) (*Scheduler, *db.DB) {
 	t.Helper()
 	dir := t.TempDir()
 	database, err := db.New(dir)
@@ -22,9 +22,11 @@ func newTestScheduler(t *testing.T, cfg *config.Config) (*Scheduler, *db.DB) {
 	if err != nil {
 		t.Fatalf("generate salt: %v", err)
 	}
-	cfg.Passphrase = "test-passphrase"
-	cfg.KeySalt = salt
-	cfg.DataDir = dir
+	cfg := &config.Config{
+		Passphrase: "test-passphrase",
+		KeySalt:    salt,
+		DataDir:    dir,
+	}
 
 	a, err := agent.New(cfg, database)
 	if err != nil {
@@ -55,27 +57,40 @@ func TestValidateCronExpr(t *testing.T) {
 }
 
 func TestIntegrityScanScheduleRegistered(t *testing.T) {
-	cfg := &config.Config{
+	s, database := newTestScheduler(t)
+	sched, err := database.CreateSchedule(db.Schedule{
+		Name:                  "nightly",
+		CronExpr:              "0 2 * * *",
+		SourceDirs:            []string{"/data"},
+		Enabled:               true,
 		IntegrityScanEnabled:  true,
 		IntegrityScanCronExpr: "0 3 * * 0",
+	})
+	if err != nil {
+		t.Fatalf("create schedule: %v", err)
 	}
-	s, _ := newTestScheduler(t, cfg)
 	if err := s.Start(); err != nil {
 		t.Fatalf("start scheduler: %v", err)
 	}
 	defer s.Stop()
 
-	if s.scanID == 0 {
+	if _, ok := s.scanIDs[sched.ID]; !ok {
 		t.Fatal("integrity scan schedule was not registered with cron")
 	}
 }
 
 func TestIntegrityScanScheduleFiresAndCreatesJob(t *testing.T) {
-	cfg := &config.Config{
+	s, database := newTestScheduler(t)
+	if _, err := database.CreateSchedule(db.Schedule{
+		Name:                  "nightly",
+		CronExpr:              "0 2 * * *",
+		SourceDirs:            []string{"/data"},
+		Enabled:               true,
 		IntegrityScanEnabled:  true,
 		IntegrityScanCronExpr: "@every 1s",
+	}); err != nil {
+		t.Fatalf("create schedule: %v", err)
 	}
-	s, database := newTestScheduler(t, cfg)
 	if err := s.Start(); err != nil {
 		t.Fatalf("start scheduler: %v", err)
 	}
@@ -98,27 +113,74 @@ func TestIntegrityScanScheduleFiresAndCreatesJob(t *testing.T) {
 }
 
 func TestIntegrityScanScheduleAfterReload(t *testing.T) {
-	cfg := &config.Config{
-		IntegrityScanEnabled:  false,
-		IntegrityScanCronExpr: "",
+	s, database := newTestScheduler(t)
+	sched, err := database.CreateSchedule(db.Schedule{
+		Name:       "nightly",
+		CronExpr:   "0 2 * * *",
+		SourceDirs: []string{"/data"},
+		Enabled:    true,
+	})
+	if err != nil {
+		t.Fatalf("create schedule: %v", err)
 	}
-	s, _ := newTestScheduler(t, cfg)
 	if err := s.Start(); err != nil {
 		t.Fatalf("start scheduler: %v", err)
 	}
 	defer s.Stop()
 
-	if s.scanID != 0 {
+	if len(s.scanIDs) != 0 {
 		t.Fatal("scan schedule should not be registered when disabled")
 	}
 
-	// Simulate the settings save path: mutate config, then Reload.
-	cfg.IntegrityScanEnabled = true
-	cfg.IntegrityScanCronExpr = "0 3 * * 0"
+	// Simulate the schedule save path: update the schedule, then Reload.
+	updated := *sched
+	updated.IntegrityScanEnabled = true
+	updated.IntegrityScanCronExpr = "0 3 * * 0"
+	if err := database.UpdateSchedule(sched.ID, updated); err != nil {
+		t.Fatalf("update schedule: %v", err)
+	}
 	if err := s.Reload(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if s.scanID == 0 {
-		t.Fatal("integrity scan schedule was not registered after config reload")
+	if _, ok := s.scanIDs[sched.ID]; !ok {
+		t.Fatal("integrity scan schedule was not registered after reload")
+	}
+}
+
+func TestScheduleSettingsRoundTrip(t *testing.T) {
+	_, database := newTestScheduler(t)
+	in := db.Schedule{
+		Name:                    "docs",
+		CronExpr:                "0 2 * * *",
+		SourceDirs:              []string{"/data/docs", "/data/photos"},
+		Enabled:                 true,
+		ExcludePaths:            []string{"/data/docs/tmp"},
+		ExcludeRegexes:          []string{`\.log$`},
+		DeletedRetentionEnabled: true,
+		DeletedRetentionValue:   2,
+		DeletedRetentionUnit:    "weeks",
+		CompressionEnabled:      true,
+		IntegrityScanEnabled:    true,
+		IntegrityScanCronExpr:   "0 3 * * 0",
+	}
+	created, err := database.CreateSchedule(in)
+	if err != nil {
+		t.Fatalf("create schedule: %v", err)
+	}
+	got, err := database.GetSchedule(created.ID)
+	if err != nil {
+		t.Fatalf("get schedule: %v", err)
+	}
+	if got.ExcludePaths[0] != "/data/docs/tmp" || got.ExcludeRegexes[0] != `\.log$` {
+		t.Errorf("excludes did not round-trip: %+v", got)
+	}
+	if !got.DeletedRetentionEnabled || got.DeletedRetentionValue != 2 || got.DeletedRetentionUnit != "weeks" {
+		t.Errorf("retention did not round-trip: %+v", got)
+	}
+	if !got.CompressionEnabled || !got.IntegrityScanEnabled || got.IntegrityScanCronExpr != "0 3 * * 0" {
+		t.Errorf("compression/scan did not round-trip: %+v", got)
+	}
+	if d, ok := got.DeletedRetentionDuration(); !ok || d != 2*7*24*time.Hour {
+		t.Errorf("DeletedRetentionDuration = %v, %v; want 2 weeks, true", d, ok)
 	}
 }

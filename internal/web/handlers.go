@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -274,17 +275,37 @@ func (h *handlers) handleGetStorage(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/jobs
+// Accepts either {"schedule_id": N} to run a configured job with its per-job
+// settings, or {"source_dirs": [...]} for an ad-hoc backup with no excludes,
+// compression, or retention.
 func (h *handlers) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var body struct {
+		ScheduleID int64    `json:"schedule_id"`
 		SourceDirs []string `json:"source_dirs"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	dirs := body.SourceDirs
-	if len(dirs) == 0 {
+
+	opts := agent.BackupOptions{SourceDirs: body.SourceDirs}
+	if body.ScheduleID != 0 {
+		sched, err := h.db.GetSchedule(body.ScheduleID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		retention, _ := sched.DeletedRetentionDuration()
+		opts = agent.BackupOptions{
+			SourceDirs:         sched.SourceDirs,
+			ExcludePaths:       sched.ExcludePaths,
+			ExcludeRegexes:     sched.ExcludeRegexes,
+			CompressionEnabled: sched.CompressionEnabled,
+			DeletedRetention:   retention,
+		}
+	}
+	if len(opts.SourceDirs) == 0 {
 		writeError(w, http.StatusBadRequest, "no source directories specified")
 		return
 	}
@@ -299,14 +320,10 @@ func (h *handlers) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	opts.JobID = jobID
 
 	go func() {
-		if err := h.agent.Run(context.Background(), agent.BackupOptions{
-			SourceDirs:     dirs,
-			ExcludePaths:   h.cfg.ExcludePaths,
-			ExcludeRegexes: h.cfg.ExcludeRegexes,
-			JobID:          jobID,
-		}); err != nil {
+		if err := h.agent.Run(context.Background(), opts); err != nil {
 			if errors.Is(err, agent.ErrAlreadyRunning) {
 				_ = h.db.UpdateJob(jobID, "skipped", 0, 0, err.Error())
 				return
@@ -508,31 +525,95 @@ func (h *handlers) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, schedules)
 }
 
+// scheduleBody is the request payload for creating or updating a schedule,
+// including its per-job backup settings.
+type scheduleBody struct {
+	Name                    string   `json:"name"`
+	CronExpr                string   `json:"cron_expr"`
+	SourceDirs              []string `json:"source_dirs"`
+	Enabled                 *bool    `json:"enabled"`
+	ExcludePaths            []string `json:"exclude_paths"`
+	ExcludeRegexes          []string `json:"exclude_regexes"`
+	DeletedRetentionEnabled bool     `json:"deleted_retention_enabled"`
+	DeletedRetentionValue   int      `json:"deleted_retention_value"`
+	DeletedRetentionUnit    string   `json:"deleted_retention_unit"`
+	CompressionEnabled      bool     `json:"compression_enabled"`
+	IntegrityScanEnabled    bool     `json:"integrity_scan_enabled"`
+	IntegrityScanCronExpr   string   `json:"integrity_scan_cron_expr"`
+}
+
+// parseScheduleBody decodes and validates a schedule payload, returning the
+// db.Schedule to persist or a non-empty error message for the client.
+func parseScheduleBody(r *http.Request) (db.Schedule, string) {
+	var body scheduleBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		return db.Schedule{}, "invalid request body"
+	}
+	if body.Name == "" || body.CronExpr == "" {
+		return db.Schedule{}, "name and cron_expr are required"
+	}
+	if len(body.SourceDirs) == 0 {
+		return db.Schedule{}, "at least one source directory is required"
+	}
+	if err := scheduler.ValidateCronExpr(body.CronExpr); err != nil {
+		return db.Schedule{}, fmt.Sprintf("invalid cron expression %q: %v", body.CronExpr, err)
+	}
+	for _, pattern := range body.ExcludeRegexes {
+		if pattern == "" {
+			continue
+		}
+		if _, err := regexp.Compile(pattern); err != nil {
+			return db.Schedule{}, fmt.Sprintf("invalid exclude regex %q: %v", pattern, err)
+		}
+	}
+	if body.DeletedRetentionValue < 0 {
+		return db.Schedule{}, "deleted_retention_value must be >= 0"
+	}
+	unit := body.DeletedRetentionUnit
+	if unit == "" {
+		unit = "days"
+	}
+	if unit != "days" && unit != "weeks" {
+		return db.Schedule{}, "deleted_retention_unit must be \"days\" or \"weeks\""
+	}
+	scanCron := strings.TrimSpace(body.IntegrityScanCronExpr)
+	if body.IntegrityScanEnabled && scanCron == "" {
+		return db.Schedule{}, "integrity scan is enabled but no cron expression is set"
+	}
+	if scanCron != "" {
+		if err := scheduler.ValidateCronExpr(scanCron); err != nil {
+			return db.Schedule{}, fmt.Sprintf("invalid integrity scan cron expression %q: %v", scanCron, err)
+		}
+	}
+	enabled := true
+	if body.Enabled != nil {
+		enabled = *body.Enabled
+	}
+	return db.Schedule{
+		Name:                    body.Name,
+		CronExpr:                body.CronExpr,
+		SourceDirs:              body.SourceDirs,
+		Enabled:                 enabled,
+		ExcludePaths:            body.ExcludePaths,
+		ExcludeRegexes:          body.ExcludeRegexes,
+		DeletedRetentionEnabled: body.DeletedRetentionEnabled,
+		DeletedRetentionValue:   body.DeletedRetentionValue,
+		DeletedRetentionUnit:    unit,
+		CompressionEnabled:      body.CompressionEnabled,
+		IntegrityScanEnabled:    body.IntegrityScanEnabled,
+		IntegrityScanCronExpr:   scanCron,
+	}, ""
+}
+
 // POST /api/schedules
 func (h *handlers) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	var body struct {
-		Name       string   `json:"name"`
-		CronExpr   string   `json:"cron_expr"`
-		SourceDirs []string `json:"source_dirs"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	s, errMsg := parseScheduleBody(r)
+	if errMsg != "" {
+		writeError(w, http.StatusBadRequest, errMsg)
 		return
 	}
-	if body.Name == "" || body.CronExpr == "" {
-		writeError(w, http.StatusBadRequest, "name and cron_expr are required")
-		return
-	}
-	if len(body.SourceDirs) == 0 {
-		writeError(w, http.StatusBadRequest, "at least one source directory is required")
-		return
-	}
-	if err := scheduler.ValidateCronExpr(body.CronExpr); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid cron expression %q: %v", body.CronExpr, err))
-		return
-	}
-	sched, err := h.db.CreateSchedule(body.Name, body.CronExpr, body.SourceDirs)
+	sched, err := h.db.CreateSchedule(s)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -548,29 +629,12 @@ func (h *handlers) handleCreateSchedule(w http.ResponseWriter, r *http.Request) 
 // PUT /api/schedules/:id
 func (h *handlers) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, id int64) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	var body struct {
-		Name       string   `json:"name"`
-		CronExpr   string   `json:"cron_expr"`
-		SourceDirs []string `json:"source_dirs"`
-		Enabled    bool     `json:"enabled"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	s, errMsg := parseScheduleBody(r)
+	if errMsg != "" {
+		writeError(w, http.StatusBadRequest, errMsg)
 		return
 	}
-	if body.Name == "" || body.CronExpr == "" {
-		writeError(w, http.StatusBadRequest, "name and cron_expr are required")
-		return
-	}
-	if len(body.SourceDirs) == 0 {
-		writeError(w, http.StatusBadRequest, "at least one source directory is required")
-		return
-	}
-	if err := scheduler.ValidateCronExpr(body.CronExpr); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid cron expression %q: %v", body.CronExpr, err))
-		return
-	}
-	if err := h.db.UpdateSchedule(id, body.Name, body.CronExpr, body.SourceDirs, body.Enabled); err != nil {
+	if err := h.db.UpdateSchedule(id, s); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -599,57 +663,32 @@ func (h *handlers) handleDeleteSchedule(w http.ResponseWriter, r *http.Request, 
 // GET /api/config
 func (h *handlers) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	sanitized := map[string]interface{}{
-		"remote_host":               h.cfg.RemoteHost,
-		"remote_port":               h.cfg.RemotePort,
-		"remote_user":               h.cfg.RemoteUser,
-		"remote_key_path":           h.cfg.RemoteKeyPath,
-		"remote_password":           maskSecret(h.cfg.RemotePassword),
-		"remote_base_path":          h.cfg.RemoteBasePath,
-		"exclude_paths":             h.cfg.ExcludePaths,
-		"exclude_regexes":           h.cfg.ExcludeRegexes,
-		"deleted_retention_enabled": h.cfg.DeletedRetentionEnabled,
-		"deleted_retention_value":   h.cfg.DeletedRetentionValue,
-		"deleted_retention_unit":    h.cfg.DeletedRetentionUnit,
-		"compression_enabled":       h.cfg.CompressionEnabled,
-		"integrity_scan_enabled":    h.cfg.IntegrityScanEnabled,
-		"integrity_scan_cron_expr":  h.cfg.IntegrityScanCronExpr,
+		"remote_host":      h.cfg.RemoteHost,
+		"remote_port":      h.cfg.RemotePort,
+		"remote_user":      h.cfg.RemoteUser,
+		"remote_key_path":  h.cfg.RemoteKeyPath,
+		"remote_password":  maskSecret(h.cfg.RemotePassword),
+		"remote_base_path": h.cfg.RemoteBasePath,
 	}
 	writeJSON(w, http.StatusOK, sanitized)
 }
 
 // PUT /api/config
+// Backup job settings (excludes, retention, compression, integrity scan) are
+// configured per job via /api/schedules, not here.
 func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var body struct {
-		RemoteHost              string   `json:"remote_host"`
-		RemotePort              int      `json:"remote_port"`
-		RemoteUser              string   `json:"remote_user"`
-		RemoteKeyPath           string   `json:"remote_key_path"`
-		RemotePassword          string   `json:"remote_password"`
-		RemoteBasePath          string   `json:"remote_base_path"`
-		ExcludePaths            []string `json:"exclude_paths"`
-		ExcludeRegexes          []string `json:"exclude_regexes"`
-		DeletedRetentionEnabled bool     `json:"deleted_retention_enabled"`
-		DeletedRetentionValue   int      `json:"deleted_retention_value"`
-		DeletedRetentionUnit    string   `json:"deleted_retention_unit"`
-		CompressionEnabled      bool     `json:"compression_enabled"`
-		IntegrityScanEnabled    bool     `json:"integrity_scan_enabled"`
-		IntegrityScanCronExpr   string   `json:"integrity_scan_cron_expr"`
+		RemoteHost     string `json:"remote_host"`
+		RemotePort     int    `json:"remote_port"`
+		RemoteUser     string `json:"remote_user"`
+		RemoteKeyPath  string `json:"remote_key_path"`
+		RemotePassword string `json:"remote_password"`
+		RemoteBasePath string `json:"remote_base_path"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
-	}
-	scanCron := strings.TrimSpace(body.IntegrityScanCronExpr)
-	if body.IntegrityScanEnabled && scanCron == "" {
-		writeError(w, http.StatusBadRequest, "integrity scan is enabled but no cron expression is set")
-		return
-	}
-	if scanCron != "" {
-		if err := scheduler.ValidateCronExpr(scanCron); err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid integrity scan cron expression %q: %v", scanCron, err))
-			return
-		}
 	}
 	if body.RemoteHost != "" {
 		h.cfg.RemoteHost = body.RemoteHost
@@ -669,22 +708,6 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if body.RemoteBasePath != "" {
 		h.cfg.RemoteBasePath = body.RemoteBasePath
 	}
-	if body.ExcludePaths != nil {
-		h.cfg.ExcludePaths = body.ExcludePaths
-	}
-	if body.ExcludeRegexes != nil {
-		h.cfg.ExcludeRegexes = body.ExcludeRegexes
-	}
-	h.cfg.DeletedRetentionEnabled = body.DeletedRetentionEnabled
-	if body.DeletedRetentionValue >= 0 {
-		h.cfg.DeletedRetentionValue = body.DeletedRetentionValue
-	}
-	if body.DeletedRetentionUnit != "" {
-		h.cfg.DeletedRetentionUnit = body.DeletedRetentionUnit
-	}
-	h.cfg.CompressionEnabled = body.CompressionEnabled
-	h.cfg.IntegrityScanEnabled = body.IntegrityScanEnabled
-	h.cfg.IntegrityScanCronExpr = scanCron
 
 	// On the first UI save after migrating from a single-file config, create
 	// secrets.json so that infrastructure fields are not lost when config.json
@@ -701,11 +724,6 @@ func (h *handlers) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if err := config.SaveUI(h.cfg, h.cfgPath); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("save config: %v", err))
 		return
-	}
-	if h.sched != nil {
-		if err := h.sched.Reload(); err != nil {
-			log.Printf("config reload schedules: %v", err)
-		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -834,10 +852,16 @@ func (h *handlers) handleGetActiveJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// POST /api/scan
-func (h *handlers) handleCreateScan(w http.ResponseWriter, r *http.Request) {
+// POST /api/schedules/:id/scan — starts an integrity scan scoped to the
+// schedule's source directories.
+func (h *handlers) handleRunScheduleScan(w http.ResponseWriter, r *http.Request, id int64) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	sched, err := h.db.GetSchedule(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	if h.agent.IsScanRunning() {
@@ -850,7 +874,7 @@ func (h *handlers) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go func() {
-		if err := h.agent.RunScan(context.Background(), jobID); err != nil {
+		if err := h.agent.RunScan(context.Background(), jobID, sched.SourceDirs); err != nil {
 			if errors.Is(err, agent.ErrScanAlreadyRunning) {
 				_ = h.db.UpdateJob(jobID, "skipped", 0, 0, err.Error())
 				return
@@ -940,13 +964,6 @@ func (h *handlers) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/jobs/active", h.requireAuth(h.handleGetActiveJob))
 	mux.HandleFunc("/api/scan/active/stop", h.requireAuth(h.handleStopScan))
 	mux.HandleFunc("/api/scan/active", h.requireAuth(h.handleGetActiveScan))
-	mux.HandleFunc("/api/scan", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			h.handleCreateScan(w, r)
-			return
-		}
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}))
 	mux.HandleFunc("/api/jobs", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -1045,6 +1062,16 @@ func (h *handlers) registerRoutes(mux *http.ServeMux) {
 		}
 	}))
 	mux.HandleFunc("/api/schedules/", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		// /api/schedules/:id/scan — run a per-job integrity scan now
+		if strings.HasSuffix(r.URL.Path, "/scan") {
+			id, ok := parseIDFromPath(r.URL.Path, "/api/schedules/", "/scan")
+			if !ok {
+				writeError(w, http.StatusBadRequest, "invalid schedule id")
+				return
+			}
+			h.handleRunScheduleScan(w, r, id)
+			return
+		}
 		id, ok := parseIDFromPath(r.URL.Path, "/api/schedules/", "")
 		if !ok {
 			writeError(w, http.StatusBadRequest, "invalid schedule id")

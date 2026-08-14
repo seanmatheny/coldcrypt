@@ -22,7 +22,7 @@ type Scheduler struct {
 	db       *db.DB
 	agent    *agent.Agent
 	entryIDs map[int64]cronv3.EntryID
-	scanID   cronv3.EntryID
+	scanIDs  map[int64]cronv3.EntryID // per-schedule integrity scan entries
 }
 
 // ValidateCronExpr checks expr against the same parser the scheduler uses,
@@ -40,6 +40,7 @@ func New(database *db.DB, a *agent.Agent, cfg *config.Config) *Scheduler {
 		db:       database,
 		agent:    a,
 		entryIDs: make(map[int64]cronv3.EntryID),
+		scanIDs:  make(map[int64]cronv3.EntryID),
 	}
 }
 
@@ -79,7 +80,7 @@ func (s *Scheduler) Reload() error {
 	s.cron.Stop()
 	s.cron = cronv3.New()
 	s.entryIDs = make(map[int64]cronv3.EntryID)
-	s.scanID = 0
+	s.scanIDs = make(map[int64]cronv3.EntryID)
 
 	if err := s.loadSchedules(); err != nil {
 		return err
@@ -100,8 +101,9 @@ func (s *Scheduler) loadSchedules() error {
 		if !sched.Enabled {
 			continue
 		}
+		sched := sched
 		entryID, err := s.cron.AddFunc(sched.CronExpr, func() {
-			s.runSchedule(sched.ID, sched.Name, sched.SourceDirs)
+			s.runSchedule(sched)
 		})
 		if err != nil {
 			log.Printf("scheduler: invalid cron expr for schedule %d (%s): %v", sched.ID, sched.CronExpr, err)
@@ -109,34 +111,32 @@ func (s *Scheduler) loadSchedules() error {
 		}
 		s.entryIDs[sched.ID] = entryID
 		log.Printf("scheduler: loaded schedule %d '%s' (%s)", sched.ID, sched.Name, sched.CronExpr)
+
+		if sched.IntegrityScanEnabled && sched.IntegrityScanCronExpr != "" {
+			scanID, err := s.cron.AddFunc(sched.IntegrityScanCronExpr, func() {
+				s.runScheduleScan(sched)
+			})
+			if err != nil {
+				log.Printf("scheduler: invalid integrity scan cron expression for schedule %d (%q): %v",
+					sched.ID, sched.IntegrityScanCronExpr, err)
+				continue
+			}
+			s.scanIDs[sched.ID] = scanID
+			log.Printf("scheduler: loaded integrity scan for schedule %d '%s' (%s)",
+				sched.ID, sched.Name, sched.IntegrityScanCronExpr)
+		}
 	}
-	s.loadScanSchedule()
 	return nil
 }
 
-func (s *Scheduler) loadScanSchedule() {
-	if !s.cfg.IntegrityScanEnabled || s.cfg.IntegrityScanCronExpr == "" {
-		return
-	}
-	entryID, err := s.cron.AddFunc(s.cfg.IntegrityScanCronExpr, func() {
-		s.runScan()
-	})
-	if err != nil {
-		log.Printf("scheduler: invalid integrity scan cron expression %q: %v", s.cfg.IntegrityScanCronExpr, err)
-		return
-	}
-	s.scanID = entryID
-	log.Printf("scheduler: loaded integrity scan schedule (%s)", s.cfg.IntegrityScanCronExpr)
-}
-
-// runSchedule executes a backup for the given schedule.
-func (s *Scheduler) runSchedule(scheduleID int64, name string, sourceDirs []string) {
+// runSchedule executes a backup for the given schedule using its per-job settings.
+func (s *Scheduler) runSchedule(sched db.Schedule) {
 	if s.agent.IsRunning() {
-		log.Printf("scheduler: skipping scheduled backup '%s': a backup is already in progress", name)
+		log.Printf("scheduler: skipping scheduled backup '%s': a backup is already in progress", sched.Name)
 		return
 	}
 
-	log.Printf("scheduler: starting scheduled backup '%s'", name)
+	log.Printf("scheduler: starting scheduled backup '%s'", sched.Name)
 
 	jobID, err := s.db.CreateJob()
 	if err != nil {
@@ -144,36 +144,41 @@ func (s *Scheduler) runSchedule(scheduleID int64, name string, sourceDirs []stri
 		return
 	}
 
-	_ = s.db.UpdateScheduleLastRun(scheduleID)
+	_ = s.db.UpdateScheduleLastRun(sched.ID)
 
-	if len(sourceDirs) == 0 {
-		msg := fmt.Sprintf("schedule '%s' has no source directories configured", name)
+	if len(sched.SourceDirs) == 0 {
+		msg := fmt.Sprintf("schedule '%s' has no source directories configured", sched.Name)
 		log.Printf("scheduler: %s", msg)
 		_ = s.db.UpdateJob(jobID, "failed", 0, 0, msg)
 		return
 	}
 
+	retention, _ := sched.DeletedRetentionDuration()
 	ctx := context.Background()
 	if err := s.agent.Run(ctx, agent.BackupOptions{
-		SourceDirs:     sourceDirs,
-		ExcludePaths:   s.cfg.ExcludePaths,
-		ExcludeRegexes: s.cfg.ExcludeRegexes,
-		JobID:          jobID,
+		SourceDirs:         sched.SourceDirs,
+		ExcludePaths:       sched.ExcludePaths,
+		ExcludeRegexes:     sched.ExcludeRegexes,
+		CompressionEnabled: sched.CompressionEnabled,
+		DeletedRetention:   retention,
+		JobID:              jobID,
 	}); err != nil {
 		if errors.Is(err, agent.ErrAlreadyRunning) {
-			log.Printf("scheduler: skipping scheduled backup '%s': %v", name, err)
+			log.Printf("scheduler: skipping scheduled backup '%s': %v", sched.Name, err)
 			_ = s.db.UpdateJob(jobID, "skipped", 0, 0, err.Error())
 			return
 		}
-		log.Printf("scheduler: backup '%s' failed: %v", name, err)
+		log.Printf("scheduler: backup '%s' failed: %v", sched.Name, err)
 		_ = s.db.UpdateJob(jobID, "failed", 0, 0, err.Error())
 		notify.SendFailure(s.cfg.NtfyTopic, jobID, err.Error())
 	}
 }
 
-func (s *Scheduler) runScan() {
+// runScheduleScan executes an integrity scan scoped to the schedule's source
+// directories.
+func (s *Scheduler) runScheduleScan(sched db.Schedule) {
 	if s.agent.IsScanRunning() {
-		log.Printf("scheduler: skipping scan: already in progress")
+		log.Printf("scheduler: skipping scan for '%s': already in progress", sched.Name)
 		return
 	}
 	jobID, err := s.db.CreateJobWithType("scan")
@@ -182,12 +187,12 @@ func (s *Scheduler) runScan() {
 		return
 	}
 	ctx := context.Background()
-	if err := s.agent.RunScan(ctx, jobID); err != nil {
+	if err := s.agent.RunScan(ctx, jobID, sched.SourceDirs); err != nil {
 		if errors.Is(err, agent.ErrScanAlreadyRunning) {
 			_ = s.db.UpdateJob(jobID, "skipped", 0, 0, err.Error())
 			return
 		}
-		log.Printf("scheduler: scan failed: %v", err)
+		log.Printf("scheduler: scan for '%s' failed: %v", sched.Name, err)
 		_ = s.db.UpdateJob(jobID, "failed", 0, 0, err.Error())
 		notify.SendFailure(s.cfg.NtfyTopic, jobID, err.Error())
 	}
