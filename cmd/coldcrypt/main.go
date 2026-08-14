@@ -190,6 +190,27 @@ func cmdServe(args []string) {
 	}
 	defer database.Close()
 
+	// One-time migration: when the per-job settings columns were just added to
+	// an existing database, seed every schedule from the legacy global config
+	// so jobs keep behaving exactly as before the settings became per-job.
+	if database.ScheduleSettingsMigrated {
+		seed := db.Schedule{
+			ExcludePaths:            cfg.ExcludePaths,
+			ExcludeRegexes:          cfg.ExcludeRegexes,
+			DeletedRetentionEnabled: cfg.DeletedRetentionEnabled,
+			DeletedRetentionValue:   cfg.DeletedRetentionValue,
+			DeletedRetentionUnit:    cfg.DeletedRetentionUnit,
+			CompressionEnabled:      cfg.CompressionEnabled,
+			IntegrityScanEnabled:    cfg.IntegrityScanEnabled,
+			IntegrityScanCronExpr:   cfg.IntegrityScanCronExpr,
+		}
+		if err := database.SeedScheduleJobSettings(seed); err != nil {
+			log.Printf("warning: seed per-job settings from global config: %v", err)
+		} else {
+			log.Printf("migrated global backup settings to per-job settings on all schedules")
+		}
+	}
+
 	a, err := agent.New(cfg, database)
 	if err != nil {
 		log.Fatalf("create agent: %v", err)
@@ -257,12 +278,15 @@ func cmdBackup(args []string) {
 		log.Fatalf("create job: %v", err)
 	}
 
+	retention, _ := cfg.DeletedRetentionDuration()
 	log.Printf("Starting backup job %d", jobID)
 	if err := a.Run(context.Background(), agent.BackupOptions{
-		SourceDirs:     dirs,
-		ExcludePaths:   cfg.ExcludePaths,
-		ExcludeRegexes: cfg.ExcludeRegexes,
-		JobID:          jobID,
+		SourceDirs:         dirs,
+		ExcludePaths:       cfg.ExcludePaths,
+		ExcludeRegexes:     cfg.ExcludeRegexes,
+		CompressionEnabled: cfg.CompressionEnabled,
+		DeletedRetention:   retention,
+		JobID:              jobID,
 	}); err != nil {
 		log.Printf("backup failed: %v", err)
 		_ = database.UpdateJob(jobID, "failed", 0, 0, err.Error())
@@ -297,7 +321,7 @@ func cmdScan(args []string) {
 	}
 
 	log.Printf("Starting integrity scan job %d", jobID)
-	if err := a.RunScan(context.Background(), jobID); err != nil {
+	if err := a.RunScan(context.Background(), jobID, nil); err != nil {
 		log.Printf("scan failed: %v", err)
 		_ = database.UpdateJob(jobID, "failed", 0, 0, err.Error())
 		os.Exit(1)

@@ -64,14 +64,14 @@ func (s *Server) Start() error {
 	}
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
 
-	// Safari falls back to /favicon.ico when it can't use the <link> icons.
+	// Safari prefers /favicon.ico at the site root over <link> icons.
 	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-		data, err := staticFS.ReadFile("static/img/favicon-32.png")
+		data, err := staticFS.ReadFile("static/img/favicon.ico")
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Type", "image/x-icon")
 		_, _ = w.Write(data)
 	})
 

@@ -80,7 +80,7 @@ go build ./cmd/coldcrypt/
 ```
 
 This creates two files:
-- `~/.coldcrypt/config.json` — UI-editable settings (remote server, source directories, retention policy)
+- `~/.coldcrypt/config.json` — UI-editable settings (remote server connection)
 - `~/.coldcrypt/secrets.json` — infrastructure/puppet-managed settings (passphrase, key salt, web port, TLS, ntfy topic)
 
 ### 2. Edit the config files
@@ -133,11 +133,13 @@ not manage this file if users will also change settings through the web UI.
 | `remote_key_path` | — | Path to SSH private key |
 | `remote_password` | — | SSH password (if not using key) |
 | `remote_base_path` | `/backup/coldcrypt` | Base directory on remote server |
-| `exclude_paths` | `[]` | Absolute paths to exclude (and their descendants) |
-| `exclude_regexes` | `[]` | Regular expressions matched against source paths to exclude files/directories |
-| `deleted_retention_enabled` | `false` | Retain files deleted at source before automatic purge |
-| `deleted_retention_value` | `0` | Retention duration value |
-| `deleted_retention_unit` | `"days"` | Retention duration unit (`"days"` or `"weeks"`) |
+
+Backup job settings — exclude paths, exclude regexes, deleted-source
+retention, compression, and integrity scans — are configured **per job** in
+the web UI's Jobs tab and stored in the database, not in `config.json`.
+Legacy global values for these keys are still read once on upgrade and copied
+onto every existing job, and the `coldcrypt backup` CLI continues to honour
+them for one-off runs.
 
 ### `secrets.json` — infrastructure/puppet-managed settings
 
@@ -253,11 +255,11 @@ sudo chown -R coldcrypt:coldcrypt /var/lib/coldcrypt
 
 After signing in at `http(s)://localhost:8443`:
 
-- **Dashboard** — overview stats, recent jobs, "Run Backup Now" button
+- **Dashboard** — overview stats and recent jobs
 - **Files** — searchable pseudo-filesystem browser; click "Versions" on any file to see its backup history and trigger a restore; click "Restore" on a directory to restore all its files; click "Purge" on a directory (or "Purge All" in the header) to permanently delete its backed-up blobs
-- **Jobs** — backup and restore job history with status badges (green=completed, yellow=running, red=failed); auto-refreshes for running jobs and shows active transfer progress
-- **Schedules** — add/edit/delete cron-based schedules; examples provided for common intervals
-- **Settings** — edit remote server config, source directories, and change the web UI password
+- **Jobs** — add/edit/delete cron-based backup jobs, each with its own source directories; every job card has a "Run Now" button to run it immediately
+- **Activity** — backup and restore job history with status badges (green=completed, yellow=running, red=failed); auto-refreshes for running jobs and shows active transfer progress
+- **Settings** — edit remote server config, exclusions, and change the web UI password
 
 ---
 
@@ -327,6 +329,59 @@ ReadOnlyPaths=/home /srv/data
 # Allow restoring into custom writable destinations.
 ReadWritePaths=/Restore /mnt/restore-target
 ```
+
+### Granting read access to backup sources
+
+The service runs as the unprivileged `coldcrypt` user, so every file you back
+up must be readable by that user, and every directory on the path to it must be
+traversable (execute bit). A `permission denied` error on a job usually means
+the source files are owned by another user (e.g. `root` or an application user
+like `jellyfin`) with restrictive modes.
+
+The recommended fix is a POSIX ACL — it grants `coldcrypt` read access without
+changing the files' owner or loosening permissions for anyone else:
+
+```bash
+# Grant read on existing files and traverse on existing directories.
+sudo setfacl -R -m u:coldcrypt:rX /var/backups/jellyfin
+```
+
+```bash
+# Also set a default ACL so files created there in the future (e.g. nightly
+# dumps) are readable by coldcrypt too.
+sudo setfacl -R -m d:u:coldcrypt:rX /var/backups/jellyfin
+```
+
+Verify access as the service user before re-running the job:
+
+```bash
+sudo -u coldcrypt find /var/backups/jellyfin ! -readable
+```
+
+Any paths this prints are still unreadable; no output means you are good to go.
+
+Alternatively, if the source files are already group-readable, add `coldcrypt`
+to the owning group instead (group changes only take effect after a service
+restart):
+
+```bash
+sudo usermod -aG jellyfin coldcrypt
+sudo systemctl restart coldcrypt
+```
+
+Caveats:
+
+- ACLs require filesystem support; ext4 and XFS have it enabled by default.
+  The `setfacl` tool comes from the `acl` package on Debian/Ubuntu.
+- If an application explicitly writes its files with mode `0600` (common for
+  database dumps), that chmod overrides the inherited default ACL's mask and
+  the files stay unreadable — both for ACLs and the group approach. In that
+  case configure the producing application to write group-readable files, or
+  re-run the `setfacl -R -m u:coldcrypt:rX` command from a cron job or timer
+  before the backup runs.
+- Remember `ProtectSystem=strict` in the unit file: source directories outside
+  the paths systemd already allows must also be listed in `ReadOnlyPaths=`
+  (see step 4). Both the sandbox and Unix permissions have to allow access.
 
 ### 5. View logs
 

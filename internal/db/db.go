@@ -16,6 +16,11 @@ import (
 // DB wraps the SQLite database.
 type DB struct {
 	conn *sql.DB
+
+	// ScheduleSettingsMigrated is true when New added the per-job settings
+	// columns to a pre-existing schedules table. The caller should seed those
+	// columns from the legacy global config via SeedScheduleJobSettings.
+	ScheduleSettingsMigrated bool
 }
 
 // Job represents a backup job record.
@@ -73,7 +78,8 @@ type JobError struct {
 	Message   string
 }
 
-// Schedule represents a scheduled backup.
+// Schedule represents a scheduled backup job together with its per-job
+// backup settings (excludes, retention, compression, integrity scan).
 type Schedule struct {
 	ID         int64
 	Name       string
@@ -82,6 +88,32 @@ type Schedule struct {
 	Enabled    bool
 	CreatedAt  time.Time
 	LastRunAt  *time.Time
+
+	// Per-job backup settings.
+	ExcludePaths            []string
+	ExcludeRegexes          []string
+	DeletedRetentionEnabled bool
+	DeletedRetentionValue   int
+	DeletedRetentionUnit    string // "days" or "weeks"
+	CompressionEnabled      bool
+	IntegrityScanEnabled    bool
+	IntegrityScanCronExpr   string
+}
+
+// DeletedRetentionDuration returns the job's deleted-source retention duration
+// when the feature is enabled and valid.
+func (s *Schedule) DeletedRetentionDuration() (time.Duration, bool) {
+	if !s.DeletedRetentionEnabled || s.DeletedRetentionValue <= 0 {
+		return 0, false
+	}
+	switch strings.ToLower(s.DeletedRetentionUnit) {
+	case "", "day", "days":
+		return time.Duration(s.DeletedRetentionValue) * 24 * time.Hour, true
+	case "week", "weeks":
+		return time.Duration(s.DeletedRetentionValue) * 7 * 24 * time.Hour, true
+	default:
+		return 0, false
+	}
 }
 
 // ScanEntry holds the data needed to verify one backed-up blob.
@@ -144,7 +176,15 @@ CREATE TABLE IF NOT EXISTS schedules (
     source_dirs TEXT NOT NULL,
     enabled BOOLEAN NOT NULL DEFAULT 1,
     created_at DATETIME NOT NULL,
-    last_run_at DATETIME
+    last_run_at DATETIME,
+    exclude_paths TEXT NOT NULL DEFAULT '',
+    exclude_regexes TEXT NOT NULL DEFAULT '',
+    deleted_retention_enabled INTEGER NOT NULL DEFAULT 0,
+    deleted_retention_value INTEGER NOT NULL DEFAULT 0,
+    deleted_retention_unit TEXT NOT NULL DEFAULT 'days',
+    compression_enabled INTEGER NOT NULL DEFAULT 0,
+    integrity_scan_enabled INTEGER NOT NULL DEFAULT 0,
+    integrity_scan_cron_expr TEXT NOT NULL DEFAULT ''
 );
 `
 
@@ -177,27 +217,90 @@ func New(dataDir string) (*DB, error) {
 	// Add mtime_ns column to existing databases that pre-date this column.
 	// Use PRAGMA table_info rather than catching ALTER TABLE errors so the
 	// migration is robust across SQLite driver versions.
-	if err := addColumnIfMissing(conn, "file_versions", "mtime_ns",
+	if _, err := addColumnIfMissing(conn, "file_versions", "mtime_ns",
 		`ALTER TABLE file_versions ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return nil, err
 	}
 	// Add deleted_at column to existing databases that pre-date source-deletion
 	// retention tracking.
-	if err := addColumnIfMissing(conn, "files", "deleted_at",
+	if _, err := addColumnIfMissing(conn, "files", "deleted_at",
 		`ALTER TABLE files ADD COLUMN deleted_at DATETIME`); err != nil {
 		return nil, err
 	}
 	// Add job_type column to existing databases so backup and restore jobs can
 	// be distinguished in history.
-	if err := addColumnIfMissing(conn, "backup_jobs", "job_type",
+	if _, err := addColumnIfMissing(conn, "backup_jobs", "job_type",
 		`ALTER TABLE backup_jobs ADD COLUMN job_type TEXT NOT NULL DEFAULT 'backup'`); err != nil {
 		return nil, err
 	}
-	if err := addColumnIfMissing(conn, "file_versions", "blob_hash",
+	if _, err := addColumnIfMissing(conn, "file_versions", "blob_hash",
 		`ALTER TABLE file_versions ADD COLUMN blob_hash TEXT NOT NULL DEFAULT ''`); err != nil {
 		return nil, err
 	}
-	return &DB{conn: conn}, nil
+
+	// Add per-job backup settings columns to existing schedules tables. When
+	// any of these are freshly added the caller should seed them from the
+	// legacy global config (see ScheduleSettingsMigrated).
+	migrated := false
+	for _, m := range []struct{ column, alter string }{
+		{"exclude_paths", `ALTER TABLE schedules ADD COLUMN exclude_paths TEXT NOT NULL DEFAULT ''`},
+		{"exclude_regexes", `ALTER TABLE schedules ADD COLUMN exclude_regexes TEXT NOT NULL DEFAULT ''`},
+		{"deleted_retention_enabled", `ALTER TABLE schedules ADD COLUMN deleted_retention_enabled INTEGER NOT NULL DEFAULT 0`},
+		{"deleted_retention_value", `ALTER TABLE schedules ADD COLUMN deleted_retention_value INTEGER NOT NULL DEFAULT 0`},
+		{"deleted_retention_unit", `ALTER TABLE schedules ADD COLUMN deleted_retention_unit TEXT NOT NULL DEFAULT 'days'`},
+		{"compression_enabled", `ALTER TABLE schedules ADD COLUMN compression_enabled INTEGER NOT NULL DEFAULT 0`},
+		{"integrity_scan_enabled", `ALTER TABLE schedules ADD COLUMN integrity_scan_enabled INTEGER NOT NULL DEFAULT 0`},
+		{"integrity_scan_cron_expr", `ALTER TABLE schedules ADD COLUMN integrity_scan_cron_expr TEXT NOT NULL DEFAULT ''`},
+	} {
+		added, err := addColumnIfMissing(conn, "schedules", m.column, m.alter)
+		if err != nil {
+			return nil, err
+		}
+		if added {
+			migrated = true
+		}
+	}
+	return &DB{conn: conn, ScheduleSettingsMigrated: migrated}, nil
+}
+
+// SeedScheduleJobSettings copies the given per-job settings onto every
+// existing schedule. It is called once after the per-job settings columns are
+// first added, so that schedules keep behaving as they did under the legacy
+// global configuration.
+func (d *DB) SeedScheduleJobSettings(s Schedule) error {
+	_, err := d.conn.Exec(
+		`UPDATE schedules SET
+			exclude_paths=?, exclude_regexes=?,
+			deleted_retention_enabled=?, deleted_retention_value=?, deleted_retention_unit=?,
+			compression_enabled=?, integrity_scan_enabled=?, integrity_scan_cron_expr=?`,
+		strings.Join(s.ExcludePaths, "\n"), strings.Join(s.ExcludeRegexes, "\n"),
+		boolToInt(s.DeletedRetentionEnabled), s.DeletedRetentionValue, retentionUnitOrDefault(s.DeletedRetentionUnit),
+		boolToInt(s.CompressionEnabled), boolToInt(s.IntegrityScanEnabled), s.IntegrityScanCronExpr,
+	)
+	return err
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func retentionUnitOrDefault(unit string) string {
+	if unit == "" {
+		return "days"
+	}
+	return unit
+}
+
+// splitLines splits a newline-joined list column back into a slice, returning
+// nil for an empty value.
+func splitLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
 }
 
 // Close closes the database connection.
@@ -207,11 +310,12 @@ func (d *DB) Close() error {
 
 // addColumnIfMissing adds the given column to a table only when it is not
 // already present. It uses PRAGMA table_info to check for the column, which is
-// more reliable than catching driver-specific error message strings.
-func addColumnIfMissing(conn *sql.DB, table, column, alterSQL string) error {
+// more reliable than catching driver-specific error message strings. It
+// reports whether the column was added.
+func addColumnIfMissing(conn *sql.DB, table, column, alterSQL string) (bool, error) {
 	rows, err := conn.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
-		return fmt.Errorf("table_info %s: %w", table, err)
+		return false, fmt.Errorf("table_info %s: %w", table, err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -221,19 +325,19 @@ func addColumnIfMissing(conn *sql.DB, table, column, alterSQL string) error {
 		var dflt sql.NullString
 		var pk int
 		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
-			return fmt.Errorf("scan table_info %s: %w", table, err)
+			return false, fmt.Errorf("scan table_info %s: %w", table, err)
 		}
 		if name == column {
-			return nil // column already exists
+			return false, nil // column already exists
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("table_info rows %s: %w", table, err)
+		return false, fmt.Errorf("table_info rows %s: %w", table, err)
 	}
 	if _, err := conn.Exec(alterSQL); err != nil {
-		return fmt.Errorf("add column %s.%s: %w", table, column, err)
+		return false, fmt.Errorf("add column %s.%s: %w", table, column, err)
 	}
-	return nil
+	return true, nil
 }
 
 // CreateJob creates a new backup job and returns its ID.
@@ -637,13 +741,26 @@ func (d *DB) ListFilesByDisplayPrefix(prefix string) ([]FileEntry, error) {
 	return files, rows.Err()
 }
 
-// CreateSchedule creates a new schedule.
-func (d *DB) CreateSchedule(name, cronExpr string, sourceDirs []string) (*Schedule, error) {
-	dirs := strings.Join(sourceDirs, "\n")
-	now := time.Now().UTC().Format(time.RFC3339)
+// scheduleColumns is the SELECT column list matching scanSchedules.
+const scheduleColumns = `id, name, cron_expr, source_dirs, enabled, created_at, last_run_at,
+	exclude_paths, exclude_regexes,
+	deleted_retention_enabled, deleted_retention_value, deleted_retention_unit,
+	compression_enabled, integrity_scan_enabled, integrity_scan_cron_expr`
+
+// CreateSchedule creates a new schedule from s (ID/CreatedAt/LastRunAt are
+// ignored) and returns the stored record.
+func (d *DB) CreateSchedule(s Schedule) (*Schedule, error) {
+	now := time.Now().UTC()
 	res, err := d.conn.Exec(
-		`INSERT INTO schedules (name, cron_expr, source_dirs, enabled, created_at) VALUES (?,?,?,1,?)`,
-		name, cronExpr, dirs, now,
+		`INSERT INTO schedules (name, cron_expr, source_dirs, enabled, created_at,
+			exclude_paths, exclude_regexes,
+			deleted_retention_enabled, deleted_retention_value, deleted_retention_unit,
+			compression_enabled, integrity_scan_enabled, integrity_scan_cron_expr)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		s.Name, s.CronExpr, strings.Join(s.SourceDirs, "\n"), boolToInt(s.Enabled), now.Format(time.RFC3339),
+		strings.Join(s.ExcludePaths, "\n"), strings.Join(s.ExcludeRegexes, "\n"),
+		boolToInt(s.DeletedRetentionEnabled), s.DeletedRetentionValue, retentionUnitOrDefault(s.DeletedRetentionUnit),
+		boolToInt(s.CompressionEnabled), boolToInt(s.IntegrityScanEnabled), s.IntegrityScanCronExpr,
 	)
 	if err != nil {
 		return nil, err
@@ -652,21 +769,15 @@ func (d *DB) CreateSchedule(name, cronExpr string, sourceDirs []string) (*Schedu
 	if err != nil {
 		return nil, err
 	}
-	return &Schedule{
-		ID:         id,
-		Name:       name,
-		CronExpr:   cronExpr,
-		SourceDirs: sourceDirs,
-		Enabled:    true,
-		CreatedAt:  time.Now().UTC(),
-	}, nil
+	s.ID = id
+	s.CreatedAt = now
+	s.DeletedRetentionUnit = retentionUnitOrDefault(s.DeletedRetentionUnit)
+	return &s, nil
 }
 
 // ListSchedules returns all schedules.
 func (d *DB) ListSchedules() ([]Schedule, error) {
-	rows, err := d.conn.Query(
-		`SELECT id, name, cron_expr, source_dirs, enabled, created_at, last_run_at FROM schedules ORDER BY id`,
-	)
+	rows, err := d.conn.Query(`SELECT ` + scheduleColumns + ` FROM schedules ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -674,20 +785,43 @@ func (d *DB) ListSchedules() ([]Schedule, error) {
 	return scanSchedules(rows)
 }
 
+// GetSchedule returns a single schedule by ID.
+func (d *DB) GetSchedule(id int64) (*Schedule, error) {
+	rows, err := d.conn.Query(`SELECT `+scheduleColumns+` FROM schedules WHERE id=?`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	schedules, err := scanSchedules(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(schedules) == 0 {
+		return nil, errors.New("schedule not found")
+	}
+	return &schedules[0], nil
+}
+
 func scanSchedules(rows *sql.Rows) ([]Schedule, error) {
 	var schedules []Schedule
 	for rows.Next() {
 		var s Schedule
-		var dirsStr, createdAtStr string
+		var dirsStr, createdAtStr, exclPathsStr, exclRegexStr string
 		var lastRunStr sql.NullString
-		var enabledInt int
-		if err := rows.Scan(&s.ID, &s.Name, &s.CronExpr, &dirsStr, &enabledInt, &createdAtStr, &lastRunStr); err != nil {
+		var enabledInt, delRetainInt, compressionInt, scanInt int
+		if err := rows.Scan(&s.ID, &s.Name, &s.CronExpr, &dirsStr, &enabledInt, &createdAtStr, &lastRunStr,
+			&exclPathsStr, &exclRegexStr,
+			&delRetainInt, &s.DeletedRetentionValue, &s.DeletedRetentionUnit,
+			&compressionInt, &scanInt, &s.IntegrityScanCronExpr); err != nil {
 			return nil, err
 		}
 		s.Enabled = enabledInt != 0
-		if dirsStr != "" {
-			s.SourceDirs = strings.Split(dirsStr, "\n")
-		}
+		s.SourceDirs = splitLines(dirsStr)
+		s.ExcludePaths = splitLines(exclPathsStr)
+		s.ExcludeRegexes = splitLines(exclRegexStr)
+		s.DeletedRetentionEnabled = delRetainInt != 0
+		s.CompressionEnabled = compressionInt != 0
+		s.IntegrityScanEnabled = scanInt != 0
 		s.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
 		if lastRunStr.Valid {
 			t, _ := time.Parse(time.RFC3339, lastRunStr.String)
@@ -698,16 +832,19 @@ func scanSchedules(rows *sql.Rows) ([]Schedule, error) {
 	return schedules, rows.Err()
 }
 
-// UpdateSchedule updates a schedule by ID.
-func (d *DB) UpdateSchedule(id int64, name, cronExpr string, sourceDirs []string, enabled bool) error {
-	dirs := strings.Join(sourceDirs, "\n")
-	enabledInt := 0
-	if enabled {
-		enabledInt = 1
-	}
+// UpdateSchedule updates a schedule by ID from s (ID/CreatedAt/LastRunAt are ignored).
+func (d *DB) UpdateSchedule(id int64, s Schedule) error {
 	_, err := d.conn.Exec(
-		`UPDATE schedules SET name=?, cron_expr=?, source_dirs=?, enabled=? WHERE id=?`,
-		name, cronExpr, dirs, enabledInt, id,
+		`UPDATE schedules SET name=?, cron_expr=?, source_dirs=?, enabled=?,
+			exclude_paths=?, exclude_regexes=?,
+			deleted_retention_enabled=?, deleted_retention_value=?, deleted_retention_unit=?,
+			compression_enabled=?, integrity_scan_enabled=?, integrity_scan_cron_expr=?
+		 WHERE id=?`,
+		s.Name, s.CronExpr, strings.Join(s.SourceDirs, "\n"), boolToInt(s.Enabled),
+		strings.Join(s.ExcludePaths, "\n"), strings.Join(s.ExcludeRegexes, "\n"),
+		boolToInt(s.DeletedRetentionEnabled), s.DeletedRetentionValue, retentionUnitOrDefault(s.DeletedRetentionUnit),
+		boolToInt(s.CompressionEnabled), boolToInt(s.IntegrityScanEnabled), s.IntegrityScanCronExpr,
+		id,
 	)
 	return err
 }
