@@ -138,7 +138,7 @@ func (s *Scheduler) runSchedule(sched db.Schedule) {
 
 	log.Printf("scheduler: starting scheduled backup '%s'", sched.Name)
 
-	jobID, err := s.db.CreateJob()
+	jobID, err := s.db.CreateJobForSchedule("backup", sched.Name)
 	if err != nil {
 		log.Printf("scheduler: create job error: %v", err)
 		return
@@ -181,7 +181,7 @@ func (s *Scheduler) runScheduleScan(sched db.Schedule) {
 		log.Printf("scheduler: skipping scan for '%s': already in progress", sched.Name)
 		return
 	}
-	jobID, err := s.db.CreateJobWithType("scan")
+	jobID, err := s.db.CreateJobForSchedule("scan", sched.Name)
 	if err != nil {
 		log.Printf("scheduler: create scan job: %v", err)
 		return

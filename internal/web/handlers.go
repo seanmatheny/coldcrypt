@@ -290,12 +290,14 @@ func (h *handlers) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := agent.BackupOptions{SourceDirs: body.SourceDirs}
+	scheduleName := ""
 	if body.ScheduleID != 0 {
 		sched, err := h.db.GetSchedule(body.ScheduleID)
 		if err != nil {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
+		scheduleName = sched.Name
 		retention, _ := sched.DeletedRetentionDuration()
 		opts = agent.BackupOptions{
 			SourceDirs:         sched.SourceDirs,
@@ -315,7 +317,7 @@ func (h *handlers) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobID, err := h.db.CreateJob()
+	jobID, err := h.db.CreateJobForSchedule("backup", scheduleName)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -846,6 +848,13 @@ func (h *handlers) handleGetActiveJob(w http.ResponseWriter, r *http.Request) {
 		"total_files":       status.TotalFiles,
 		"bytes_transferred": status.BytesTransferred,
 	}
+	// The agent's in-memory status doesn't carry job attribution, so look up
+	// the run's record for the configured-job name.
+	if status.Running && status.JobID != 0 {
+		if job, err := h.db.GetJob(status.JobID); err == nil {
+			resp["schedule_name"] = job.ScheduleName
+		}
+	}
 	if !status.StartedAt.IsZero() {
 		resp["started_at"] = status.StartedAt.UTC().Format(time.RFC3339)
 	}
@@ -868,7 +877,7 @@ func (h *handlers) handleRunScheduleScan(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusConflict, "an integrity scan is already in progress")
 		return
 	}
-	jobID, err := h.db.CreateJobWithType("scan")
+	jobID, err := h.db.CreateJobForSchedule("scan", sched.Name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

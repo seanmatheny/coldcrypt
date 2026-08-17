@@ -172,6 +172,15 @@
       background: #1c2128;
     }
 
+    /* Configured-job name shown under the type badge in job tables */
+    .job-sched-name {
+      font-size: 0.75rem;
+      max-width: 140px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     /* Status badges */
     .badge-running  { background: #d29922; color: #000; }
     .badge-completed { background: #238636; color: #fff; }
@@ -518,7 +527,7 @@
           <table class="table table-dark mb-0">
             <thead>
               <tr>
-                <th>ID</th><th>Status</th><th>Type</th><th>Started</th><th>Completed</th><th>Files</th><th>Transferred</th><th>Error</th><th></th>
+                <th>ID</th><th>Status</th><th>Type</th><th>Started</th><th>Completed</th><th>Files</th><th>Transferred</th><th>Summary</th><th></th>
               </tr>
             </thead>
             <tbody id="jobs-tbody"></tbody>

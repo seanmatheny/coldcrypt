@@ -537,7 +537,7 @@ async function loadJobs() {
   const tbody = document.getElementById('jobs-tbody');
   tbody.innerHTML = '';
   if (jobs.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" class="text-muted text-center py-3">No jobs yet</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="text-muted text-center py-3">No jobs yet</td></tr>';
     return;
   }
   jobs.forEach(job => {
@@ -549,7 +549,7 @@ function jobRow(job) {
   return `<tr>
     <td class="text-muted small">#${job.ID}</td>
     <td>${statusBadge(job.Status)}</td>
-    <td>${jobTypeBadge(job.JobType)}</td>
+    <td>${jobTypeCell(job)}</td>
     <td class="small">${fmtDate(job.StartedAt)}</td>
     <td class="small">${job.FilesProcessed}</td>
     <td class="small">${fmtSize(job.BytesTransferred)}</td>
@@ -557,16 +557,17 @@ function jobRow(job) {
 }
 
 function jobRowFull(job) {
-  const errText = formatScanResultMessage(job);
+  const summaryText = formatScanResultMessage(job);
+  const summaryClass = job.ErrorMessage ? 'text-danger' : 'text-muted';
   return `<tr>
     <td class="text-muted small">#${job.ID}</td>
     <td>${statusBadge(job.Status)}</td>
-    <td>${jobTypeBadge(job.JobType)}</td>
+    <td>${jobTypeCell(job)}</td>
     <td class="small">${fmtDate(job.StartedAt)}</td>
     <td class="small">${job.CompletedAt ? fmtDate(job.CompletedAt) : '—'}</td>
     <td class="small">${job.FilesProcessed}</td>
     <td class="small">${fmtSize(job.BytesTransferred)}</td>
-    <td class="small text-danger">${esc(errText)}</td>
+    <td class="small ${summaryClass}">${esc(summaryText)}</td>
     <td class="small"><button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="openJobFiles(${job.ID})" title="View files transferred"><i class="fa fa-list"></i></button></td>
   </tr>`;
 }
@@ -582,6 +583,15 @@ function formatScanResultMessage(job) {
     return `${job.FilesProcessed} files scanned, no issues`;
   }
   return '';
+}
+
+// Renders the type badge plus, for runs started from a configured job, the
+// job's name underneath (truncated; full name in the hover title).
+function jobTypeCell(job) {
+  const badge = jobTypeBadge(job.JobType);
+  if (!job.ScheduleName) return badge;
+  const name = esc(job.ScheduleName);
+  return `${badge}<div class="job-sched-name text-muted" title="${name}">${name}</div>`;
 }
 
 function jobTypeBadge(type) {
@@ -810,7 +820,7 @@ function updateActiveJobUI(status) {
       const badgeEl = panel.querySelector('.badge');
       if (badgeEl) badgeEl.textContent = runningLabel;
       const jobIdEl = document.getElementById('active-job-id');
-      if (jobIdEl) jobIdEl.textContent = `Job #${status.job_id}`;
+      if (jobIdEl) jobIdEl.textContent = `Job #${status.job_id}` + (status.schedule_name ? ` — ${status.schedule_name}` : '');
       const stopBtn = document.getElementById('stop-job-btn');
       if (stopBtn) {
         stopBtn.classList.toggle('d-none', !(isBackupJob || isScanJob));
@@ -851,7 +861,7 @@ function updateActiveJobUI(status) {
       const badgeEl = dashPanel.querySelector('.badge');
       if (badgeEl) badgeEl.textContent = runningLabel;
       const el = document.getElementById('dash-active-job-id');
-      if (el) el.textContent = `Job #${status.job_id}`;
+      if (el) el.textContent = `Job #${status.job_id}` + (status.schedule_name ? ` — ${status.schedule_name}` : '');
       const stopBtn = document.getElementById('dash-stop-btn');
       if (stopBtn) stopBtn.classList.toggle('d-none', !(isBackupJob || isScanJob));
       const fileEl = document.getElementById('dash-active-file');

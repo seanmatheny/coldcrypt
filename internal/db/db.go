@@ -27,6 +27,7 @@ type DB struct {
 type Job struct {
 	ID               int64
 	JobType          string
+	ScheduleName     string // name of the configured job that started this run; empty for ad-hoc runs and restores
 	StartedAt        time.Time
 	CompletedAt      *time.Time
 	Status           string
@@ -150,6 +151,7 @@ CREATE TABLE IF NOT EXISTS file_versions (
 CREATE TABLE IF NOT EXISTS backup_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_type TEXT NOT NULL DEFAULT 'backup',
+    schedule_name TEXT NOT NULL DEFAULT '',
     started_at DATETIME NOT NULL,
     completed_at DATETIME,
     status TEXT NOT NULL DEFAULT 'running',
@@ -235,6 +237,12 @@ func New(dataDir string) (*DB, error) {
 	}
 	if _, err := addColumnIfMissing(conn, "file_versions", "blob_hash",
 		`ALTER TABLE file_versions ADD COLUMN blob_hash TEXT NOT NULL DEFAULT ''`); err != nil {
+		return nil, err
+	}
+	// Add schedule_name column so job history can show which configured job a
+	// run belongs to. Pre-existing rows keep an empty name.
+	if _, err := addColumnIfMissing(conn, "backup_jobs", "schedule_name",
+		`ALTER TABLE backup_jobs ADD COLUMN schedule_name TEXT NOT NULL DEFAULT ''`); err != nil {
 		return nil, err
 	}
 
@@ -340,19 +348,25 @@ func addColumnIfMissing(conn *sql.DB, table, column, alterSQL string) (bool, err
 	return true, nil
 }
 
-// CreateJob creates a new backup job and returns its ID.
+// CreateJob creates a new ad-hoc backup job and returns its ID.
 func (d *DB) CreateJob() (int64, error) {
-	return d.CreateJobWithType("backup")
+	return d.CreateJobForSchedule("backup", "")
 }
 
-// CreateJobWithType creates a new job with the provided job type.
+// CreateJobWithType creates a new ad-hoc job with the provided job type.
 func (d *DB) CreateJobWithType(jobType string) (int64, error) {
+	return d.CreateJobForSchedule(jobType, "")
+}
+
+// CreateJobForSchedule creates a new job attributed to the named configured
+// job. Pass an empty scheduleName for ad-hoc runs.
+func (d *DB) CreateJobForSchedule(jobType, scheduleName string) (int64, error) {
 	if strings.TrimSpace(jobType) == "" {
 		jobType = "backup"
 	}
 	res, err := d.conn.Exec(
-		`INSERT INTO backup_jobs (job_type, started_at, status) VALUES (?, ?, 'running')`,
-		jobType, time.Now().UTC().Format(time.RFC3339),
+		`INSERT INTO backup_jobs (job_type, schedule_name, started_at, status) VALUES (?, ?, ?, 'running')`,
+		jobType, scheduleName, time.Now().UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return 0, err
@@ -376,7 +390,7 @@ func (d *DB) UpdateJob(id int64, status string, filesProcessed int, bytesTransfe
 // ListJobs returns up to limit recent backup jobs ordered by start time descending.
 func (d *DB) ListJobs(limit int) ([]Job, error) {
 	rows, err := d.conn.Query(
-		`SELECT id, COALESCE(job_type,'backup'), started_at, completed_at, status, files_processed, bytes_transferred, COALESCE(error_message,'') FROM backup_jobs ORDER BY started_at DESC LIMIT ?`,
+		`SELECT id, COALESCE(job_type,'backup'), COALESCE(schedule_name,''), started_at, completed_at, status, files_processed, bytes_transferred, COALESCE(error_message,'') FROM backup_jobs ORDER BY started_at DESC LIMIT ?`,
 		limit,
 	)
 	if err != nil {
@@ -389,7 +403,7 @@ func (d *DB) ListJobs(limit int) ([]Job, error) {
 // GetJob returns a single backup job by ID.
 func (d *DB) GetJob(id int64) (*Job, error) {
 	rows, err := d.conn.Query(
-		`SELECT id, COALESCE(job_type,'backup'), started_at, completed_at, status, files_processed, bytes_transferred, COALESCE(error_message,'') FROM backup_jobs WHERE id=?`,
+		`SELECT id, COALESCE(job_type,'backup'), COALESCE(schedule_name,''), started_at, completed_at, status, files_processed, bytes_transferred, COALESCE(error_message,'') FROM backup_jobs WHERE id=?`,
 		id,
 	)
 	if err != nil {
@@ -412,7 +426,7 @@ func scanJobs(rows *sql.Rows) ([]Job, error) {
 		var j Job
 		var startedAtStr string
 		var completedAtStr sql.NullString
-		if err := rows.Scan(&j.ID, &j.JobType, &startedAtStr, &completedAtStr, &j.Status, &j.FilesProcessed, &j.BytesTransferred, &j.ErrorMessage); err != nil {
+		if err := rows.Scan(&j.ID, &j.JobType, &j.ScheduleName, &startedAtStr, &completedAtStr, &j.Status, &j.FilesProcessed, &j.BytesTransferred, &j.ErrorMessage); err != nil {
 			return nil, err
 		}
 		t, _ := time.Parse(time.RFC3339, startedAtStr)
